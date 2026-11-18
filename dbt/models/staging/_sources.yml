@@ -1,0 +1,36 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Date brute, încărcate 1:1 din CSV-urile Olist (src/ingest/load_csv.py, toate coloanele text)
+      și din API-ul Frankfurter (src/ingest/ingest_fx.py).
+    tables:
+      - name: orders
+        description: Comenzi Olist, un rând per comandă.
+      - name: order_items
+        description: Linii de comandă; cheie (order_id, order_item_id).
+      - name: order_payments
+        description: Plăți per comandă; cheie (order_id, payment_sequential).
+      - name: order_reviews
+        description: Recenzii; review_id NU e unic în sursă (aceeași recenzie apare pe mai multe comenzi).
+      - name: customers
+        description: Clienți; customer_id e per comandă, customer_unique_id identifică persoana.
+      - name: products
+        description: Catalog produse (coloanele *_lenght păstrează typo-ul din dataset-ul original).
+      - name: sellers
+        description: Vânzători.
+      - name: geolocation
+        description: Coordonate per prefix de cod poștal; mai multe rânduri per prefix, fără cheie.
+      - name: category_translation
+        description: Traducerea numelor de categorie din portugheză în engleză.
+      - name: fx_rates
+        description: >
+          Cursuri zilnice ECB prin Frankfurter, doar zile lucrătoare; cheie (rate_date, base, quote).
+          Încărcat prin UPSERT, deci _loaded_at reflectă ultima rulare a ingestiei.
+        config:
+          loaded_at_field: _loaded_at
+          freshness:
+            warn_after: {count: 7, period: day}
+            error_after: {count: 30, period: day}

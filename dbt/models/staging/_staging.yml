@@ -1,0 +1,84 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: Comenzi, cu timestamp-uri tipizate (ora locală Brazilia, fără fus orar).
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: stg_order_items
+    description: Linii de comandă; prețurile sunt în BRL.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_id, order_item_id]
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+      - name: order_item_id
+        data_tests: [not_null]
+
+  - name: stg_order_payments
+    description: Plăți per comandă; valorile sunt în BRL.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_id, payment_sequential]
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+      - name: payment_sequential
+        data_tests: [not_null]
+
+  - name: stg_order_reviews
+    description: Recenzii. Duplicatele pe review_id NU sunt rezolvate aici (vezi testul cu severity warn).
+    columns:
+      - name: review_id
+        data_tests:
+          - not_null
+          - unique:
+              config:
+                severity: warn  # duplicate cunoscute în sursă, tratate într-o etapă ulterioară
+
+  - name: stg_customers
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+
+  - name: stg_products
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+
+  - name: stg_sellers
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]
+
+  - name: stg_geolocation
+    description: Mai multe coordonate per prefix poștal; nu are cheie primară.
+    columns:
+      - name: zip_code_prefix
+        data_tests: [not_null]
+
+  - name: stg_category_translation
+    columns:
+      - name: product_category_name
+        data_tests: [unique, not_null]
+
+  - name: stg_fx_rates
+    description: Cursuri zilnice (zile lucrătoare ECB); 1 base_currency = rate quote_currency.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [rate_date, base_currency, quote_currency]
+    columns:
+      - name: rate_date
+        data_tests: [not_null]
+      - name: base_currency
+        data_tests: [not_null]
+      - name: quote_currency
+        data_tests: [not_null]
+      - name: rate
+        data_tests: [not_null]
