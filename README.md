@@ -2,7 +2,7 @@
 
 > An end-to-end data platform that turns raw e-commerce data into a trustworthy analytical model, then lets people ask business questions in plain language. Answers come from SQL (numbers) or RAG over customer reviews (reasons), with sources cited.
 
-**Status: work in progress.** The ingestion layer is finished and tested. Modeling, the data API and the AI assistant are being built in the open; see the [roadmap](#roadmap).
+**Status: work in progress.** Ingestion, the dbt models (staging + core star schema, with data tests) and the read-only data API are done and tested. The AI assistant (review embeddings, RAG, question routing) is next; see the [roadmap](#roadmap).
 
 ---
 
@@ -30,7 +30,7 @@ flowchart LR
     I --> J[LLM answer<br/>with cited sources]
 ```
 
-Solid parts are built today (ingestion → `raw`); the rest is on the roadmap.
+Built today: ingestion → `raw`, dbt → `core`, and the FastAPI data API. Embeddings, RAG and the question router are on the roadmap.
 
 ## Tech stack
 
@@ -39,9 +39,9 @@ Solid parts are built today (ingestion → `raw`); the rest is on the roadmap.
 | Languages | Python 3.12, SQL |
 | Database | PostgreSQL 16 + pgvector, run in Docker |
 | Ingestion | pandas, psycopg (`COPY`), `requests` with retry/backoff, run log (`etl_log`) |
-| Transformation | dbt (staging + core models, data tests) *(planned)* |
+| Transformation | dbt (staging + core models, data tests) |
 | AI | multilingual embeddings, RAG, LLM API, read-only text-to-SQL *(planned)* |
-| API | FastAPI, Pydantic, OpenAPI docs *(planned)* |
+| API | FastAPI, Pydantic, OpenAPI docs |
 | Quality & delivery | pytest, GitHub Actions CI *(planned)*, Git/GitHub |
 
 ## What works today
@@ -59,6 +59,32 @@ Solid parts are built today (ingestion → `raw`); the rest is on the roadmap.
 - **Raw first**: the unmodified JSON response is stored in `raw.fx_rates_raw` before any transformation, so loads can be audited and replayed.
 - **Idempotent**: upsert on `(rate_date, base, quote)`; re-running it over the full period still yields exactly 563 rows.
 - Unit-tested with pytest (date windowing, response flattening).
+
+### Data API
+A read-only FastAPI service over the `core` star schema. All endpoints are versioned under `/v1`:
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /v1/health` | Service status, including a database check (no API key needed; `503` if the database is down) |
+| `GET /v1/metrics/revenue?from=&to=&granularity=day\|month\|year&currency=BRL\|EUR` | Revenue series and total, using the [revenue definition](#real-data-problems-this-project-tackles) (`is_revenue = true`) |
+| `GET /v1/metrics/delivery-performance?state=SP` | Delivered orders, average delivery days, late orders and late percentage; `state` is optional |
+| `GET /v1/products/top?category=&limit=10&metric=revenue\|quantity` | Top products by revenue or units sold (`limit` up to 100) |
+| `GET /v1/orders?status=&limit=50&cursor=` | Orders, newest first, with cursor pagination (`limit` up to 200) |
+
+- **Authentication**: every endpoint except `/v1/health` requires an `X-API-Key` header. The key is compared in constant time, and a missing or wrong key returns `401`.
+- **Least-privilege database access**: the API connects as `api_reader`, a login role created by `sql/init/04_api_role.sql`. It has `SELECT` on the `core` tables only, no access to `raw` or `staging`, and read-only sessions. Default privileges keep the grant in place when dbt rebuilds the tables. The password comes from an environment variable and is never stored in SQL.
+- **Cursor pagination**: keyset pagination on `(order_purchase_at, order_id)`, not `OFFSET`. Each response includes an opaque `next_cursor`, which is `null` on the last page. Pages stay stable and never repeat rows.
+- **Validation and errors**: query parameters are validated with Pydantic (for example `from <= to`, enums, limits, Brazilian state codes). Invalid input returns `422`, or `400` for a malformed cursor. Database failures return `503` with a generic message, and the internal details stay in the server log.
+- **Docs**: interactive OpenAPI docs with descriptions and examples at [`/docs`](http://127.0.0.1:8000/docs) once the server is running.
+- **Run it** (from the project root, with the variables from `.env`):
+  ```bash
+  dotenv -f .env run -- uvicorn app.main:app --reload
+  ```
+- **Known limitation**: the `state` filter in `/v1/metrics/delivery-performance` uses the customer's **current** address from `dim_customers`, which is the address on their most recent order. It does not use the address at the time of each order, so for customers who moved, an order can count toward their newer state.
+
+![Auto-generated OpenAPI docs](docs/api-docs.png)
+
+*Auto-generated OpenAPI docs*
 
 ## Real data problems this project tackles
 
@@ -84,7 +110,7 @@ These issues are in the source data. Each one is handled in dbt and guarded by a
 - [x] dbt: staging models, star schema (`fact_order_items`, `fact_payments`, `fact_reviews`, dimensions, `dim_fx_daily`), data-quality tests
 - [ ] Orchestration (Airflow or Dagster), optional
 - [ ] Review embeddings stored in pgvector
-- [ ] Data API (FastAPI): metrics, filters, cursor pagination, API-key auth, read-only DB role, pytest
+- [x] Data API (FastAPI): metrics, filters, cursor pagination, API-key auth, read-only DB role, pytest
 - [ ] `/v1/ask`: question routing to RAG or read-only text-to-SQL, answers with cited reviews
 - [ ] Evaluation on a set of 20–30 test questions
 - [ ] CI (GitHub Actions), containerized app, architecture write-up
@@ -94,16 +120,20 @@ These issues are in the source data. Each one is handled in dbt and guarded by a
 Requirements: Docker, Python 3.12.
 
 ```bash
-# 1. Start PostgreSQL + pgvector (creates the raw/staging/core schemas and tables)
+# 1. Configure the environment (before the first `docker compose up`, which reads it)
+cp .env.example .env
+#    then replace every placeholder with your own values:
+#    POSTGRES_PASSWORD, API_DB_PASSWORD and a long random API_KEY
+
+# 2. Start PostgreSQL + pgvector
+#    On a fresh volume this runs sql/init/ automatically: schemas, raw and FX tables,
+#    and the read-only api_reader role (password taken from API_DB_PASSWORD).
 docker compose up -d
 
-# 2. Python environment
+# 3. Python environment
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# 3. Configure the database connection
-cp .env.example .env             # then fill in your values
 
 # 4. Download the Olist dataset from Kaggle (link below) and place the CSVs in data/
 
@@ -111,8 +141,24 @@ cp .env.example .env             # then fill in your values
 python src/ingest/load_csv.py
 python src/ingest/ingest_fx.py
 
-# 6. Run the tests
-pytest
+# 6. Build and test the dbt models (dbt reads the connection from the .env variables)
+cd dbt
+dotenv -f ../.env run -- dbt run
+dotenv -f ../.env run -- dbt test
+cd ..
+
+# 7. Existing database only: sql/init/ runs only on a new volume, so create
+#    the api_reader role once by hand (safe to re-run)
+dotenv -f .env run -- docker compose exec -T -e API_DB_PASSWORD db \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/04_api_role.sql'
+
+# 8. Start the data API, then open http://127.0.0.1:8000/docs
+#    Call protected endpoints with the header  X-API-Key: <your API_KEY>
+dotenv -f .env run -- uvicorn app.main:app --reload
+
+# 9. Run the tests (integration tests against the database are skipped
+#    automatically when it is not reachable)
+dotenv -f .env run -- pytest
 ```
 
 Dataset: [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (~100k orders, 2016–2018). Raw data is not committed to this repository.
@@ -120,12 +166,25 @@ Dataset: [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/d
 ## Repository layout
 
 ```
-sql/init/        Database initialization (schemas, raw tables, FX tables)
-src/ingest/      Ingestion scripts (CSV loader, Frankfurter API, data inspection)
-tests/           pytest unit tests
+sql/init/                     Database initialization, run on a fresh volume in order:
+  01_init.sql                   pgvector extension + raw / staging / core schemas
+  02_raw_tables.sql             raw tables for the Olist CSVs
+  03_fx_tables.sql              raw.fx_rates_raw and raw.fx_rates
+  04_api_role.sql               read-only api_reader role for the data API
+src/ingest/                   Ingestion scripts (CSV loader, Frankfurter API, data inspection)
+dbt/                          dbt project
+  models/staging/               stg_* views over raw (renames, casts) + sources
+  models/core/                  star schema: dim_*, fact_*, reconciliation model
+  tests/                        singular tests + generic unique_combination_of_columns
+  macros/                       generate_schema_name (exact schema names)
+app/                          FastAPI data API
+  main.py, config.py, db.py     app setup, settings, connection pool
+  auth.py, schemas.py           X-API-Key auth, Pydantic models
+  queries.py, pagination.py     parameterized SQL, keyset cursor
+  routers/                      health, metrics, products, orders
+tests/                        pytest tests (ingestion helpers)
+  api/                          API tests (auth, validation, pagination, responses, integration)
 ```
-
-More folders (`dbt/`, `app/`) will appear as the roadmap items land.
 
 ## Design decisions
 
