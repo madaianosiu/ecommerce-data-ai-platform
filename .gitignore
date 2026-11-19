@@ -10,3 +10,6 @@ target/
 dbt_packages/
 logs/
 .user.yml
+
+# modele descărcate (sentence-transformers / Hugging Face)
+.cache/
