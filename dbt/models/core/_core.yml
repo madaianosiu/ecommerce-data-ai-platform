@@ -1,0 +1,182 @@
+version: 2
+
+models:
+  # ---------- dimensiuni ----------
+  - name: dim_date
+    description: Calendar continuu, de la cea mai veche la cea mai nouă dată din comenzi.
+    columns:
+      - name: date_day
+        data_tests: [unique, not_null]
+
+  - name: dim_fx_daily
+    description: >
+      Curs BRL->EUR pentru fiecare zi din dim_date, as-of: ultimul curs ECB publicat până în acea zi.
+      rate_brl_eur = câți EUR valorează 1 BRL.
+    columns:
+      - name: date
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: rate_brl_eur
+        data_tests: [not_null]
+      - name: rate_source_date
+        description: Data cursului efectiv folosit (<= date).
+        data_tests: [not_null]
+      - name: is_filled
+        description: true când nu există curs publicat în ziua respectivă (weekend/sărbătoare).
+        data_tests: [not_null]
+
+  - name: dim_customers
+    description: >
+      Un rând per client real (customer_unique_id). customer_id din sursă e per comandă;
+      maparea customer_id -> customer_unique_id e păstrată în fact_orders.
+      Adresa provine din comanda cea mai recentă.
+    columns:
+      - name: customer_unique_id
+        data_tests: [unique, not_null]
+
+  - name: dim_products
+    description: Produse cu categorie tradusă; 'unknown' fără categorie, fallback pe numele portughez fără traducere.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: product_category
+        data_tests: [not_null]
+      - name: product_category_name_pt
+        data_tests: [not_null]
+
+  - name: dim_sellers
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]
+
+  # ---------- fapte ----------
+  - name: fact_orders
+    description: Grain = o comandă. Status, timestamp-uri și indicatori de livrare; fără sume.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: customer_unique_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_unique_id
+      - name: order_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [delivered, shipped, canceled, unavailable, invoiced, processing, created, approved]
+      - name: order_purchase_date
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: delivery_days
+        description: Zile calendaristice de la cumpărare la livrarea la client (NULL dacă nu e livrată).
+      - name: is_late
+        description: Livrată după data estimată (NULL dacă nu există dată de livrare).
+      - name: has_delivery_date_issue
+        description: Status 'delivered' dar fără order_delivered_customer_at.
+        data_tests: [not_null]
+
+  - name: fact_order_items
+    description: Grain = order_id + order_item_id. Prețuri în BRL și EUR (curs din ziua cumpărării).
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_id, order_item_id]
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fact_orders')
+                field: order_id
+      - name: order_item_id
+        data_tests: [not_null]
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: seller_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_sellers')
+                field: seller_id
+      - name: order_purchase_date
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_fx_daily')
+                field: date
+      - name: price_brl
+        data_tests: [not_null]
+      - name: price_eur
+        data_tests: [not_null]
+
+  - name: fact_payments
+    description: >
+      Grain = order_id + payment_sequential. Separat de fact_order_items ca să nu se dubleze
+      veniturile la join. Valori în BRL și EUR (curs din ziua cumpărării).
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_id, payment_sequential]
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fact_orders')
+                field: order_id
+      - name: payment_sequential
+        data_tests: [not_null]
+      - name: payment_value_brl
+        data_tests: [not_null]
+      - name: payment_value_eur
+        data_tests: [not_null]
+
+  - name: fact_reviews
+    description: >
+      Grain = review_id + order_id. Același review_id apare pe mai multe comenzi în sursă
+      (conținut identic, fără duplicate exacte), deci nu se deduplică.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [review_id, order_id]
+    columns:
+      - name: review_id
+        data_tests: [not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fact_orders')
+                field: order_id
+      - name: review_score
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
