@@ -54,31 +54,34 @@ Solid parts are built today (ingestion → `raw`); the rest is on the roadmap.
 - Handles a real-world quirk: a BOM in the category-translation file.
 
 ### REST API ingestion (Frankfurter exchange rates)
-- Pulls daily BRL→EUR rates for the full order period (555 business days) from a public REST API.
+- Pulls daily BRL→EUR rates for the full order period, 2016-09-01 to 2018-11-12 (563 business days), from a public REST API.
 - **Resilient**: timeouts, retry with exponential backoff on `429`/`5xx`, requests split into bounded date windows.
 - **Raw first**: the unmodified JSON response is stored in `raw.fx_rates_raw` before any transformation, so loads can be audited and replayed.
-- **Idempotent**: upsert on `(rate_date, base, quote)`; running it four times in a row still yields exactly 555 rows.
+- **Idempotent**: upsert on `(rate_date, base, quote)`; re-running it over the full period still yields exactly 563 rows.
 - Unit-tested with pytest (date windowing, response flattening).
 
 ## Real data problems this project tackles
 
-These issues are in the source data. They will be handled in dbt with automated tests and documented here as they are resolved.
+These issues are in the source data. Each one is handled in dbt and guarded by an automated test; the figures below come from the actual runs.
 
-| Problem | Why it matters | Planned handling |
+| Problem | Why it matters | How it was handled |
 |---|---|---|
-| 814 duplicate `review_id`s | Inflates review counts and sentiment | Deduplicate in staging, enforce `unique` test |
-| Orders marked `delivered` with no delivery date | Breaks delivery-time metrics | Flag and test; exclude from delivery KPIs |
-| 2 product categories without translation | Missing labels in reports | Explicit fallback + `relationships` test |
-| 610 products without a category | Silent gaps in category analysis | Map to an explicit `unknown` member |
-| Joining `order_items` with `order_payments` | **Duplicates revenue** (fan-out) | Separate fact tables at the correct grain |
-| FX rates exist only on business days | Weekend orders would have no rate | As-of join: last available rate on or before the order date |
+| 789 `review_id`s repeated across 1,603 rows | Looks like duplicates; naive dedup would drop real data | Checked the data first: every repeat sits on a **different `order_id`** with identical content, and there are no exact duplicates. So nothing is deduplicated: `fact_reviews` uses the grain `(review_id, order_id)` with a `unique` test on that pair (99,224 rows). The staging `unique` test on `review_id` alone is kept as a `warn` to document the quirk. |
+| 8 orders marked `delivered` with no delivery date | Breaks delivery-time metrics | Flagged with `has_delivery_date_issue` in `fact_orders`. For them `delivery_days` and `is_late` are `NULL`, so they fall out of delivery KPIs instead of skewing them. |
+| 2 product categories without translation | Missing labels in reports | `dim_products.product_category` falls back to the Portuguese name (`pc_gamer`, 3 products; `portateis_cozinha_e_preparadores_de_alimentos`, 10 products) and sets `is_translation_missing`. A `not_null` test guards the column. |
+| 610 products without a category | Silent gaps in category analysis | Mapped to an explicit `'unknown'` category with `is_category_missing = true`, never `NULL`. |
+| Joining `order_items` with `order_payments` | **Duplicates revenue** (fan-out): the naive join yields 117,601 rows and R$ 14,209,115.34 in item price vs. the true R$ 13,591,643.70 (+4.5%) | Separate facts at their own grain: `fact_order_items` (order + item, 112,650 rows) and `fact_payments` (order + payment sequence, 103,886 rows). A singular test proves item price totals in the fact equal staging exactly. |
+| FX rates exist only on business days | Weekend and holiday orders would have no rate | `dim_fx_daily` has one row per calendar day with an as-of rate (last ECB rate on or before that day): 239 of 800 days are filled (`is_filled`), the longest gap is 4 days. A test asserts every order item has an EUR rate. |
+| Payments don't match items + freight | Payment totals would overstate revenue | Payments total R$ 16,008,872.12 vs. R$ 15,843,553.24 for items + freight (+R$ 165,318.88). Of that, R$ 162,591.95 comes from 775 orders that were paid but have no items (603 `unavailable`, 164 `canceled`, 5 `created`, 2 `invoiced`, 1 `shipped`). They are listed in `recon_payments_without_items`. Orders that have both items and payments differ by only R$ 2,870.39 in total (303 of 98,665 orders). No fact rows are deleted. |
+
+**Revenue definition:** revenue = sum of `price` in `fact_order_items` for orders whose status is not `canceled` or `unavailable` (`where is_revenue`). Freight is excluded. This gives R$ 13,494,400.74 (≈ € 3,424,922.94 at the purchase-day rate).
 
 ## Roadmap
 
 - [x] Dockerized PostgreSQL 16 + pgvector with `raw`, `staging`, `core` schemas
 - [x] Repeatable CSV ingestion with row-count validation and run log
 - [x] REST API ingestion (Frankfurter) with retry and idempotent load
-- [ ] dbt: staging models, star schema (`fact_order_items`, `fact_payments`, `fact_reviews`, dimensions, `dim_fx_daily`), data-quality tests
+- [x] dbt: staging models, star schema (`fact_order_items`, `fact_payments`, `fact_reviews`, dimensions, `dim_fx_daily`), data-quality tests
 - [ ] Orchestration (Airflow or Dagster), optional
 - [ ] Review embeddings stored in pgvector
 - [ ] Data API (FastAPI): metrics, filters, cursor pagination, API-key auth, read-only DB role, pytest
