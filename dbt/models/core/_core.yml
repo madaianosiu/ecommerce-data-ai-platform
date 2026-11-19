@@ -91,7 +91,14 @@ models:
         data_tests: [not_null]
 
   - name: fact_order_items
-    description: Grain = order_id + order_item_id. Prețuri în BRL și EUR (curs din ziua cumpărării).
+    description: >
+      Grain = order_id + order_item_id. Prețuri în BRL și EUR (curs din ziua cumpărării).
+
+      **Definiția venitului:** venit = sum(price_brl) (sau price_eur) din fact_order_items pentru
+      comenzile al căror order_status nu este 'canceled' sau 'unavailable', adică `where is_revenue`.
+      Freight-ul nu intră în venit. Rândurile comenzilor excluse rămân în tabel (nu se șterge nimic),
+      doar sunt marcate is_revenue = false. Plățile nu sunt sursa venitului: comenzile plătite fără
+      items sunt explicate în recon_payments_without_items.
     data_tests:
       - unique_combination_of_columns:
           arguments:
@@ -130,6 +137,30 @@ models:
       - name: price_brl
         data_tests: [not_null]
       - name: price_eur
+        data_tests: [not_null]
+      - name: order_status
+        data_tests: [not_null]
+      - name: is_revenue
+        description: true dacă linia intră în venit (order_status nu e canceled sau unavailable).
+        data_tests: [not_null]
+
+  - name: recon_payments_without_items
+    description: >
+      Reconciliere plăți vs items: o linie per comandă care are plăți în fact_payments dar nicio
+      linie în fact_order_items, cu order_status și suma plătită. Explică cea mai mare parte din
+      diferența dintre totalul plăților și items + freight. Nu modifică și nu filtrează faptele.
+    columns:
+      - name: order_id
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fact_orders')
+                field: order_id
+      - name: order_status
+        data_tests: [not_null]
+      - name: payment_value_brl
         data_tests: [not_null]
 
   - name: fact_payments
