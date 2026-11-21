@@ -21,7 +21,8 @@ from app.rag import (
     dedupe_candidates,
     normalize_for_dedup,
 )
-from app.routers.ask import get_connection_factory, get_embedder, get_llm
+from app.routers.ask import get_classifier, get_connection_factory, get_embedder_provider, get_llm
+from app.routing import RouteDecision
 
 FAKE_LLM_KEY = "fake-llm-key-not-real-0123456789abcdef"
 
@@ -70,7 +71,9 @@ def ask_env(client, monkeypatch):
         return env.rows
 
     monkeypatch.setattr(queries, "search_reviews", fake_search)
-    app.dependency_overrides[get_embedder] = lambda: env.embedder
+    app.dependency_overrides[get_embedder_provider] = lambda: (lambda: env.embedder)
+    # Testele din acest fișier verifică ruta rag; rutarea are testele ei (tests/api/test_text_to_sql.py).
+    app.dependency_overrides[get_classifier] = lambda: (lambda question: RouteDecision("rag", "test"))
     app.dependency_overrides[get_llm] = lambda: env.llm
     app.dependency_overrides[get_connection_factory] = lambda: (lambda: nullcontext(object()))
     return env

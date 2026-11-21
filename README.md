@@ -2,7 +2,7 @@
 
 > An end-to-end data platform that turns raw e-commerce data into a trustworthy analytical model, then lets people ask business questions in plain language. Answers come from SQL (numbers) or RAG over customer reviews (reasons), with sources cited.
 
-**Status: work in progress.** Ingestion, the dbt models (staging + core star schema, with data tests), the read-only data API, review embeddings in pgvector and the RAG endpoint (`/v1/ask`) are done and tested. Next: routing questions between RAG and read-only text-to-SQL, then an evaluation set; see the [roadmap](#roadmap).
+**Status: work in progress.** Ingestion, the dbt models (staging + core star schema, with data tests), the read-only data API, review embeddings in pgvector and `/v1/ask` (a router that sends each question to restricted text-to-SQL or to RAG over reviews) are done and tested. Next: an evaluation set of test questions; see the [roadmap](#roadmap).
 
 ---
 
@@ -30,7 +30,7 @@ flowchart LR
     I --> J[LLM answer<br/>with cited sources]
 ```
 
-Built today: ingestion → `raw`, dbt → `core`, the FastAPI data API, review embeddings in pgvector and RAG answers over reviews. The question router (RAG vs text-to-SQL) is on the roadmap.
+Built today: ingestion → `raw`, dbt → `core`, the FastAPI data API, review embeddings in pgvector, and the `/v1/ask` router with its two paths: read-only text-to-SQL and RAG answers over reviews.
 
 ## Tech stack
 
@@ -40,7 +40,7 @@ Built today: ingestion → `raw`, dbt → `core`, the FastAPI data API, review e
 | Database | PostgreSQL 16 + pgvector, run in Docker |
 | Ingestion | pandas, psycopg (`COPY`), `requests` with retry/backoff, run log (`etl_log`) |
 | Transformation | dbt (staging + core models, data tests) |
-| AI | multilingual embeddings, RAG, LLM API, read-only text-to-SQL *(planned)* |
+| AI | multilingual embeddings, RAG, Gemini API, question router, read-only text-to-SQL validated with sqlglot |
 | API | FastAPI, Pydantic, OpenAPI docs |
 | Quality & delivery | pytest, GitHub Actions CI *(planned)*, Git/GitHub |
 
@@ -70,7 +70,7 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
 | `GET /v1/metrics/delivery-performance?state=SP` | Delivered orders, average delivery days, late orders and late percentage; `state` is optional |
 | `GET /v1/products/top?category=&limit=10&metric=revenue\|quantity` | Top products by revenue or units sold (`limit` up to 100) |
 | `GET /v1/orders?status=&limit=50&cursor=` | Orders, newest first, with cursor pagination (`limit` up to 200) |
-| `POST /v1/ask` | Natural-language question answered from customer reviews (RAG), with cited sources. Body: `{"question", "top_k" (default 15, max 30), "min_score", "max_score"}` |
+| `POST /v1/ask` | Natural-language question, routed to read-only text-to-SQL (numbers) or to customer reviews (RAG, with cited sources). Body: `{"question", "top_k" (default 15, max 30), "min_score", "max_score"}` |
 
 - **Authentication**: every endpoint except `/v1/health` requires an `X-API-Key` header. The key is compared in constant time, and a missing or wrong key returns `401`.
 - **Least-privilege database access**: the API connects as `api_reader`, a login role created by `sql/init/04_api_role.sql`. It has `SELECT` on the `core` tables only, no access to `raw` or `staging`, and read-only sessions. Default privileges keep the grant in place when dbt rebuilds the tables. The password comes from an environment variable and is never stored in SQL.
@@ -83,11 +83,42 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
   ```
 - **Known limitation**: the `state` filter in `/v1/metrics/delivery-performance` uses the customer's **current** address from `dim_customers`, which is the address on their most recent order. It does not use the address at the time of each order, so for customers who moved, an order can count toward their newer state.
 
-#### `/v1/ask`: questions over customer reviews (RAG)
+#### `/v1/ask`: router
+Each question is first classified by the LLM (short prompt, strict JSON, temperature 0) into one route, reported in the response's `route` field:
+
+| Route | For | Answered by |
+|---|---|---|
+| `sql` | numbers, totals, rankings, rates over orders, revenue, delivery, products | read-only text-to-SQL over `core` (below) |
+| `rag` | reasons, opinions, what customers say | semantic search over written reviews (below) |
+| `unsupported` | anything outside this data (for example profit margins: there is no cost data) | a fixed "can't answer" message, no further LLM call |
+
+If the LLM is unavailable or returns invalid JSON, a keyword classifier (English, Portuguese, Romanian) decides instead. When in doubt it picks `rag`, which is the pre-router behaviour. The notes say which method chose the route.
+
+#### `/v1/ask` route `sql`: restricted text-to-SQL
+- **What the LLM sees**: a compact description of the `core` tables only, generated from the dbt descriptions in `_core.yml` and the column types in `information_schema` (`raw`, `staging` and `core.review_embeddings` are left out), plus the metric definitions: revenue = `SUM(price_brl) WHERE is_revenue`, precomputed EUR columns, delivery = delivered orders with a delivery date. It must reply with one PostgreSQL `SELECT` (temperature 0), or `CANNOT_ANSWER: <reason>`.
+- **Safety layers** before and during execution:
+  1. **Validation with sqlglot**: no comments, exactly one statement, `SELECT` only (including `UNION` and read-only CTEs). It rejects `INSERT`/`UPDATE`/`DELETE`/`MERGE`, DDL, `COPY`, `SELECT INTO`, `FOR UPDATE`, data-modifying CTEs and unknown commands.
+  2. **Allowlist**: only the documented `core` tables. Any reference to `raw`, `staging`, `pg_catalog`, `information_schema` or another database is rejected.
+  3. **Function blocklist**: `pg_*` (including `pg_sleep`, `pg_read_file`), `lo_*`, `dblink*`, `set_config`/`current_setting`, `query_to_xml` and similar, sequences, `version()`, `current_user`.
+  4. **What runs is what was checked**: the API executes the SQL sqlglot regenerates from the validated syntax tree, not the LLM's raw text.
+  5. **Row cap**: the query is wrapped as `SELECT * FROM (...) LIMIT 200`.
+  6. **Read-only role**: it runs only as `api_reader` (`SELECT` on `core` only), and the API checks the connected role before every query and refuses any other role or a superuser.
+  7. **Read-only transaction with a 10 s `statement_timeout`.**
+- **Repair**: if the query fails validation or execution, the error is sent back to the LLM once for a corrected query. If that also fails, the API returns `422` with a generic message; internal details stay in the server log.
+- **Answer**: a second call writes a short answer in the question's language from the result rows only (at most 50 rows are shown to it). Response: `{"route": "sql", "answer", "sql" (the executed query), "rows" (up to 200), "row_count", "notes"}`.
+- **Example** (real run): *"Which customer state has the highest percentage of late deliveries?"* produced `SELECT c.customer_state, ROUND(... 100.0 * COUNT(*) FILTER (WHERE o.is_late) / COUNT(*) ...) AS late_percentage FROM core.fact_orders AS o JOIN core.dim_customers AS c ... WHERE o.order_status = 'delivered' AND o.order_delivered_customer_at IS NOT NULL GROUP BY c.customer_state ORDER BY late_percentage DESC LIMIT 1`, returning `AL, 21.41`. That is the same value as `/v1/metrics/delivery-performance?state=AL`. In the same check, monthly revenue for 2017 matched `/v1/metrics/revenue` for all 12 months, and the top-5 categories and monthly delivery times matched independent SQL.
+- **Known limits**:
+  - The validator blocks unsafe SQL, not wrong SQL. A valid query can still answer a slightly different question (wrong filter, different month bucketing), so the executed `sql` is always returned for review.
+  - Answers don't flag small samples (for example a month with a single delivered order).
+  - Only the `core` schema can be asked about.
+  - A `sql` question costs 3 LLM calls (route, query, answer) and a `rag` question 2, which counts against free-tier limits.
+  - The keyword fallback is coarse.
+
+#### `/v1/ask` route `rag`: questions over customer reviews
 - **Retrieval**: the question is embedded with the same local model as the reviews (`intfloat/multilingual-e5-small`, loaded once at startup). It is matched by cosine similarity against the 40,641 embedded review texts in `core.review_embeddings`, queried as `api_reader`. Optional `min_score`/`max_score` filters apply. The API fetches 4× `top_k` candidates and drops near-identical texts (case, accent and punctuation-insensitive), so the sources are diverse.
 - **Generation**: a Gemini model (`LLM_MODEL`, e.g. `gemini-3.5-flash-lite`) answers using only the retrieved reviews and cites them as `[n]`, matching the order of `sources`. It answers in the language of the question and says when the evidence is insufficient. Review texts are passed inside delimiters as untrusted data, and any instructions inside them are ignored.
 - **Resilience**: retries on `429`/`503`/`504` (at most 2, exponential backoff, 30 s timeout), then one attempt with `LLM_FALLBACK_MODEL`. If both fail, the API returns `503` with a retry hint; a non-retryable LLM error returns `502`. When no review matches, it returns a "not enough evidence" answer without calling the LLM. The API key is never logged.
-- **Response**: `answer`, `sources` (`review_id`, `review_score`, `text`, `similarity`), `retrieved_count`, and `notes` (subset caveat, model used, token usage). `route` is always `"rag"` for now; SQL routing is the next stage.
+- **Response**: `answer`, `sources` (`review_id`, `review_score`, `text`, `similarity`), `retrieved_count`, and `notes` (subset caveat, model used, token usage). `route` is `"rag"`.
 - **Limitation: the evidence skews negative.** Only reviews with a written comment can be retrieved: about 41% of all reviews. Unhappy customers write far more often, so 1-star reviews are 21% of written reviews vs 12% of all reviews. Answers describe what the retrieved reviews say, not how common an opinion is among all customers.
 - **Privacy note**: on the free Gemini API tier, Google may use prompts and responses to improve its products. That is acceptable here because the Olist reviews are a public dataset. Do not send private or customer data through a free-tier key.
 
@@ -180,7 +211,7 @@ The graph reads left to right: the `raw` sources (green) feed the `stg_*` stagin
 - [x] Review embeddings stored in pgvector
 - [x] Data API (FastAPI): metrics, filters, cursor pagination, API-key auth, read-only DB role, pytest
 - [x] `/v1/ask` RAG endpoint: semantic search over reviews, answers with cited reviews, retry + fallback model
-- [ ] `/v1/ask` question routing: RAG or read-only text-to-SQL
+- [x] `/v1/ask` question routing: RAG or read-only text-to-SQL (sqlglot validation, allowlist, read-only role, timeout, row cap)
 - [ ] Evaluation on a set of 20–30 test questions
 - [ ] CI (GitHub Actions), containerized app, architecture write-up
 
@@ -264,9 +295,12 @@ app/                          FastAPI data API
   auth.py, schemas.py           X-API-Key auth, Pydantic models
   queries.py, pagination.py     parameterized SQL, keyset cursor
   embedder.py, llm.py, rag.py   question embedding, Gemini client (retry + fallback), RAG prompts
+  routing.py                    question router (LLM + keyword fallback)
+  text_to_sql.py, sql_guard.py  text-to-SQL prompts and read-only execution, SQL validator
   routers/                      health, metrics, products, orders, ask
 tests/                        pytest tests (ingestion helpers)
-  api/                          API tests (auth, validation, pagination, responses, /v1/ask, integration)
+  api/                          API tests (auth, validation, pagination, responses, /v1/ask, router,
+                                text-to-SQL validator and execution, integration)
   rag/                          embedding script and LLM check tests
 ```
 
@@ -274,7 +308,7 @@ tests/                        pytest tests (ingestion helpers)
 
 - **Raw layer is append-faithful.** Data lands in `raw` exactly as received; all cleaning happens later in version-controlled, tested SQL. That keeps every transformation auditable and replayable.
 - **Idempotency over cleverness.** Every load can be re-run safely, which makes failures cheap to recover from.
-- **Text-to-SQL will be restricted.** The assistant will query through a read-only database role limited to the `core` schema, so a model mistake cannot modify or leak other data.
+- **Text-to-SQL is restricted in layers.** Generated SQL is validated (SELECT only, table allowlist, function blocklist, row cap) and then runs through a read-only role limited to the `core` schema, in a read-only transaction with a timeout. A model mistake, or a prompt-injection attempt, cannot modify or leak other data even if one layer missed it.
 - **Alternatives considered for serving data:** PostgREST/Hasura (auto-generated APIs) are useful in practice, but a hand-built FastAPI layer shows validation, pagination, versioning and auth explicitly.
 
 ## Author

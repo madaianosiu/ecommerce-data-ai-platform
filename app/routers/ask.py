@@ -5,11 +5,11 @@ from contextlib import AbstractContextManager
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app import queries
+from app import queries, text_to_sql
 from app.config import get_settings
 from app.db import connection
 from app.embedder import E5Embedder, Embedder
-from app.llm import LLMClient, LLMNotConfigured, LLMUnavailable, create_llm
+from app.llm import LLMClient, LLMNotConfigured, LLMResult, LLMUnavailable, create_llm
 from app.rag import (
     NOT_ENOUGH_EVIDENCE,
     SYSTEM_PROMPT,
@@ -20,16 +20,30 @@ from app.rag import (
     dedupe_candidates,
 )
 from app.routers._responses import AUTH_ERRORS, DB_ERRORS
-from app.schemas import AskRequest, AskResponse, AskSource, ErrorResponse
+from app.routing import DEFAULT_UNSUPPORTED_REASON, RouteDecision, classify
+from app.schemas import (
+    AskRequest,
+    AskResponse,
+    AskResult,
+    AskSource,
+    ErrorResponse,
+    SqlAskResponse,
+    UnsupportedAskResponse,
+)
+from app.sql_guard import ROW_CAP
+from app.text_to_sql import SqlContext, SqlRouteError, UNSUPPORTED_ANSWER
 
 log = logging.getLogger("app.ask")
 
 router = APIRouter(tags=["ask"], responses={
     **AUTH_ERRORS, **DB_ERRORS,
+    422: {"model": ErrorResponse, "description": "Cerere invalidă sau întrebare care nu a putut fi transformată "
+                                                 "într-o interogare SQL sigură."},
     502: {"model": ErrorResponse, "description": "Modelul de limbaj a refuzat sau a eșuat cererea."},
 })
 
 _embedder_lock = threading.Lock()
+_sql_context_lock = threading.Lock()
 
 LLM_RETRY_HINT = "The language model is temporarily unavailable. Please retry in about a minute."
 
@@ -52,6 +66,11 @@ def get_embedder(request: Request) -> Embedder:
     return embedder
 
 
+def get_embedder_provider(request: Request) -> Callable[[], Embedder]:
+    """Leneș: ruta sql nu are nevoie de modelul de embedding."""
+    return lambda: get_embedder(request)
+
+
 def get_llm(request: Request) -> LLMClient:
     llm = getattr(request.app.state, "llm", None)
     if llm is not None:
@@ -66,30 +85,115 @@ def get_llm(request: Request) -> LLMClient:
 
 
 def get_connection_factory(request: Request) -> Callable[[], AbstractContextManager]:
-    """Conexiunea se ia din pool doar pentru căutare, nu pe toată durata apelului LLM."""
+    """Conexiunea se ia din pool doar pentru căutare/interogare, nu pe toată durata apelului LLM."""
     return lambda: connection(request)
+
+
+def get_classifier(llm: LLMClient = Depends(get_llm)) -> Callable[[str], RouteDecision]:
+    return lambda question: classify(question, llm)
+
+
+def get_sql_context_provider(request: Request) -> Callable[[], SqlContext]:
+    """Descrierea schemei core (din dbt + information_schema), construită o dată, la prima întrebare sql."""
+    def provider() -> SqlContext:
+        ctx = getattr(request.app.state, "sql_context", None)
+        if ctx is None:
+            with _sql_context_lock:
+                ctx = getattr(request.app.state, "sql_context", None)
+                if ctx is None:
+                    with connection(request) as conn:
+                        ctx = text_to_sql.load_sql_context(conn)
+                    request.app.state.sql_context = ctx
+        return ctx
+    return provider
 
 
 # ---------------------------------------------------------------- endpoint
 @router.post(
     "/ask",
-    response_model=AskResponse,
-    summary="Întrebare în limbaj natural (RAG peste recenzii)",
+    response_model=AskResult,
+    summary="Întrebare în limbaj natural (rutare SQL / RAG)",
     description=(
-        "Caută recenziile scrise cele mai apropiate semantic de întrebare (multilingual-e5-small, "
-        "pgvector), elimină textele aproape identice și cere modelului de limbaj un răspuns bazat "
-        "**doar** pe aceste recenzii, cu citări [n] care corespund listei `sources`. Răspunsul vine "
-        "în limba întrebării. Recenziile cu text sunt un subset (≈41%) înclinat spre scoruri mici. "
-        "Dacă nu se găsește nicio recenzie, răspunsul spune că nu există suficiente dovezi și LLM-ul "
-        "nu e apelat. `route` e deocamdată mereu `rag`."
+        "Un router decide ruta întrebării (LLM cu JSON strict; cuvinte-cheie dacă LLM-ul nu răspunde):\n\n"
+        "* **`sql`** (cifre, totaluri, clasamente, rate): LLM-ul scrie un singur SELECT peste schema `core`, "
+        "validat cu sqlglot (doar SELECT, allowlist de tabele, funcții periculoase blocate), executat ca "
+        "`api_reader` într-o tranzacție read-only cu timeout de 10 s și maxim 200 de rânduri; răspunsul "
+        "citează doar cifrele din rânduri și include SQL-ul executat.\n"
+        "* **`rag`** (motive, opinii): căutare semantică în recenziile scrise și răspuns cu citări [n] "
+        "care corespund listei `sources`. Recenziile cu text sunt un subset (≈41%) înclinat spre scoruri mici.\n"
+        "* **`unsupported`**: întrebarea nu ține de aceste date.\n\n"
+        "Răspunsul vine în limba întrebării."
     ),
 )
 def ask(
     body: AskRequest,
-    embedder: Embedder = Depends(get_embedder),
+    classifier: Callable[[str], RouteDecision] = Depends(get_classifier),
     llm: LLMClient = Depends(get_llm),
+    embedder_provider: Callable[[], Embedder] = Depends(get_embedder_provider),
     connection_factory: Callable[[], AbstractContextManager] = Depends(get_connection_factory),
-) -> AskResponse:
+    sql_context_provider: Callable[[], SqlContext] = Depends(get_sql_context_provider),
+):
+    decision = classifier(body.question)
+    log.info("ask route=%s (by %s)", decision.route, decision.source)
+
+    if decision.route == "unsupported":
+        # O propoziție cu motivul (de la clasificator, curățată de clean_reason; altfel cea implicită).
+        reason = decision.reason or DEFAULT_UNSUPPORTED_REASON
+        return UnsupportedAskResponse(answer=f"{UNSUPPORTED_ANSWER} {reason}", notes=[_route_note(decision)])
+    if decision.route == "sql":
+        return _answer_sql(body, decision, llm, connection_factory, sql_context_provider)
+    return _answer_rag(body, embedder_provider(), llm, connection_factory)
+
+
+# ---------------------------------------------------------------- ruta sql
+def _answer_sql(body: AskRequest, decision: RouteDecision, llm: LLMClient,
+                connection_factory, sql_context_provider) -> SqlAskResponse:
+    ctx = sql_context_provider()   # DatabaseUnavailable -> 503 prin handler-ul global
+    try:
+        outcome = text_to_sql.answer_with_sql(body.question, llm, ctx, connection_factory,
+                                              expected_user=get_settings().db_user)
+    except LLMUnavailable as exc:
+        raise _llm_http_error(exc) from None
+    except SqlRouteError as exc:
+        log.warning("SQL route failed: %s", exc.internal)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.public_message) from None
+
+    notes = [_route_note(decision)]
+    if outcome.cannot_answer:
+        notes.append("No query was run: the model reported that the schema cannot answer this question.")
+    else:
+        notes.append(f"Read-only query on schema core as api_reader, {text_to_sql.STATEMENT_TIMEOUT_MS // 1000} s "
+                     f"timeout, capped at {ROW_CAP} rows.")
+        if outcome.truncated:
+            notes.append(f"The result reached the {ROW_CAP}-row cap and may be incomplete.")
+        if outcome.attempts > 1:
+            notes.append("The first generated query was rejected or failed; this is the repaired query.")
+    if body.min_score is not None or body.max_score is not None:
+        notes.append("min_score/max_score only filter review search (route rag) and were ignored.")
+    notes.append(_usage_note(outcome.llm_results))
+    return SqlAskResponse(answer=outcome.answer, sql=outcome.sql, rows=outcome.rows,
+                          row_count=len(outcome.rows), notes=notes)
+
+
+def _route_note(decision: RouteDecision) -> str:
+    by = "the language model" if decision.source == "llm" else "keyword rules (language model unavailable)"
+    return f"Route: {decision.route} (chosen by {by})."
+
+
+def _usage_note(results: list[LLMResult]) -> str:
+    total = sum(r.total_tokens or 0 for r in results)
+    models = sorted({r.model + (" (fallback)" if r.used_fallback else "") for r in results})
+    return f"Model: {', '.join(models)}; {len(results)} LLM call(s) for this route, total tokens={total}"
+
+
+def _llm_http_error(exc: LLMUnavailable) -> HTTPException:
+    if exc.transient:
+        return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, LLM_RETRY_HINT, headers={"Retry-After": "60"})
+    return HTTPException(status.HTTP_502_BAD_GATEWAY, "The language model request failed.")
+
+
+# ---------------------------------------------------------------- ruta rag (neschimbată)
+def _answer_rag(body: AskRequest, embedder: Embedder, llm: LLMClient, connection_factory) -> AskResponse:
     score_filter = _score_filter_label(body.min_score, body.max_score)
 
     try:
@@ -115,10 +219,7 @@ def ask(
     try:
         result = llm.generate(SYSTEM_PROMPT, build_user_prompt(body.question, sources))
     except LLMUnavailable as exc:
-        if exc.transient:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, LLM_RETRY_HINT,
-                                headers={"Retry-After": "60"}) from None
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The language model request failed.") from None
+        raise _llm_http_error(exc) from None
     if not result.text:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The language model returned an empty answer.")
 

@@ -111,3 +111,38 @@ def test_review_retrieval_as_api_reader(live_settings):
         filtered = queries.search_reviews(conn, vector, MODEL_NAME, 4, 5, limit=120)
         assert len(filtered) == 120
         assert all(4 <= r["review_score"] <= 5 for r in filtered)
+
+
+def test_sql_route_revenue_matches_metrics_endpoint(live_client, live_settings):
+    """Ruta sql cap-coadă pe baza reală (validator + executor read-only ca api_reader), cu LLM-ul
+    scriptat (fără rețea): venitul trebuie să fie identic cu /v1/metrics/revenue."""
+    from contextlib import contextmanager
+
+    from psycopg.rows import dict_row
+
+    from app import text_to_sql
+    from app.llm import LLMResult
+
+    class ScriptedLLM:
+        def __init__(self, *texts):
+            self.texts = list(texts)
+
+        def generate(self, system_prompt, user_prompt, *, temperature=None, json_output=False):
+            return LLMResult(text=self.texts.pop(0), model="scripted")
+
+    @contextmanager
+    def api_reader_connection():
+        with psycopg.connect(live_settings.conninfo(), row_factory=dict_row, autocommit=True) as conn:
+            yield conn
+
+    with api_reader_connection() as conn:
+        ctx = text_to_sql.load_sql_context(conn)
+    assert "review_embeddings" not in ctx.allowed_tables and "fact_order_items" in ctx.allowed_tables
+
+    llm = ScriptedLLM("SELECT ROUND(SUM(price_brl), 2) AS revenue_brl FROM core.fact_order_items WHERE is_revenue",
+                      "Total revenue was R$ 13,494,400.74.")
+    outcome = text_to_sql.answer_with_sql("What is the total revenue?", llm, ctx, api_reader_connection,
+                                          expected_user=live_settings.db_user)
+    metrics = live_client.get("/v1/metrics/revenue", params={"granularity": "year"}).json()
+    assert outcome.rows == [{"revenue_brl": REVENUE_BRL}]
+    assert outcome.rows[0]["revenue_brl"] == metrics["total_revenue"] == 13494400.74

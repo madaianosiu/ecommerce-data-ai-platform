@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 
@@ -248,8 +248,35 @@ class AskResponse(BaseModel):
         "retrieved_count": 60,
         "notes": ["Sources are written reviews only ..."],
     }]})
-    route: Literal["rag"] = Field("rag", description="Deocamdată mereu 'rag'; Etapa 9 adaugă rutarea SQL.")
+    route: Literal["rag"] = Field("rag", description="Ruta aleasă de router: 'rag' = răspuns din recenzii.")
     answer: str
     sources: list[AskSource] = Field(description="În ordinea citărilor: [1] = primul element.")
     retrieved_count: int = Field(description="Candidați aduși din baza vectorială, înainte de deduplicare.")
     notes: list[str]
+
+
+class SqlAskResponse(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{
+        "route": "sql",
+        "answer": "Total revenue was R$ 13,494,400.74.",
+        "sql": "SELECT * FROM (SELECT ROUND(SUM(price_brl), 2) AS revenue_brl FROM core.fact_order_items "
+               "WHERE is_revenue) AS capped_result LIMIT 200",
+        "rows": [{"revenue_brl": 13494400.74}],
+        "row_count": 1,
+        "notes": ["Read-only query on schema core as api_reader, 10 s timeout, capped at 200 rows."],
+    }]})
+    route: Literal["sql"] = "sql"
+    answer: str
+    sql: str | None = Field(description="Interogarea executată (validată, cu LIMIT 200); null dacă nu s-a putut răspunde.")
+    rows: list[dict[str, Any]] = Field(description="Rândurile rezultatului, maxim 200.")
+    row_count: int
+    notes: list[str]
+
+
+class UnsupportedAskResponse(BaseModel):
+    route: Literal["unsupported"] = "unsupported"
+    answer: str
+    notes: list[str]
+
+
+AskResult = Annotated[AskResponse | SqlAskResponse | UnsupportedAskResponse, Field(discriminator="route")]

@@ -46,7 +46,8 @@ class LLMUnavailable(Exception):
 
 
 class LLMClient(Protocol):
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult: ...
+    def generate(self, system_prompt: str, user_prompt: str, *, temperature: float | None = None,
+                 json_output: bool = False) -> LLMResult: ...
 
 
 @dataclass
@@ -73,10 +74,14 @@ class GeminiLLM:
             )
 
     # ------------------------------------------------------------------ API public
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+    def generate(self, system_prompt: str, user_prompt: str, *, temperature: float | None = None,
+                 json_output: bool = False) -> LLMResult:
+        """temperature=None păstrează valoarea implicită a modelului (folosit de RAG);
+        json_output cere un răspuns application/json (clasificarea întrebărilor)."""
+        options = {"temperature": temperature, "json_output": json_output}
         try:
             return self._generate_with_retries(self.model, system_prompt, user_prompt,
-                                               retries=self.max_retries, used_fallback=False)
+                                               retries=self.max_retries, used_fallback=False, **options)
         except LLMUnavailable as main_error:
             if not self.fallback_model or self.fallback_model == self.model \
                     or main_error.category in NO_FALLBACK:
@@ -84,16 +89,17 @@ class GeminiLLM:
             log.warning("LLM main model %s failed (%s); trying fallback %s once",
                         self.model, main_error.category, self.fallback_model)
             return self._generate_with_retries(self.fallback_model, system_prompt, user_prompt,
-                                               retries=0, used_fallback=True)
+                                               retries=0, used_fallback=True, **options)
 
     # ------------------------------------------------------------------ intern
     def _generate_with_retries(self, model: str, system_prompt: str, user_prompt: str,
-                               retries: int, used_fallback: bool) -> LLMResult:
+                               retries: int, used_fallback: bool, temperature: float | None = None,
+                               json_output: bool = False) -> LLMResult:
         attempt = 0
         while True:
             attempt += 1
             try:
-                response = self._call(model, system_prompt, user_prompt)
+                response = self._call(model, system_prompt, user_prompt, temperature, json_output)
                 return self._to_result(response, model, used_fallback, attempt)
             except Exception as exc:  # noqa: BLE001 - mapăm orice eroare la o categorie
                 category, message = classify_error(exc)
@@ -104,9 +110,15 @@ class GeminiLLM:
                     continue
                 raise LLMUnavailable(category, transient=category in RETRYABLE | {"network"}) from None
 
-    def _call(self, model: str, system_prompt: str, user_prompt: str):
+    def _call(self, model: str, system_prompt: str, user_prompt: str,
+              temperature: float | None = None, json_output: bool = False):
         from google.genai import types
 
+        extra = {}
+        if temperature is not None:
+            extra["temperature"] = temperature
+        if json_output:
+            extra["response_mime_type"] = "application/json"
         return self.client.models.generate_content(
             model=model,
             contents=user_prompt,
@@ -114,6 +126,7 @@ class GeminiLLM:
                 system_instruction=system_prompt,
                 # LOW: cel mai mic nivel acceptat de modelele 3.x Flash testate (MINIMAL e refuzat).
                 thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+                **extra,
             ),
         )
 
