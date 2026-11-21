@@ -173,6 +173,12 @@ Response from a real run (trimmed):
 }
 ```
 
+Translations of the Portuguese review texts above (the API returns review texts exactly as customers wrote them; the assistant answers in the language of the question):
+- **[4]** "They don't meet deadlines and ignore the customer's expectations. Lack of professionalism. Impossible to recommend....."
+- **[7]** "Unfortunately the only problem is that delivery is done by Correios (the Brazilian postal service): they don't show up on the delivery date and they even record incorrect information! E.g.: there was nobody at the delivery address!"
+- **[10]** "Late delivery without any explanation to the customer, who surely chose the product carefully and with the best expectations. Lack of consideration."
+- **[13]** "It's been more than a month since I bought the product and I still haven't received it. We pay up front, but nobody even gives an update about the delivery. A real lack of respect."
+
 *The `sources` list is shortened for readability: the real response has 15 sources, and the four shown here are numbers [4], [7], [10] and [13] in the answer's citations.*
 
 ![Auto-generated OpenAPI docs](docs/api-docs.png)
