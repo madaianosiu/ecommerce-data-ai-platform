@@ -92,3 +92,30 @@ def orders_page(conn, status: str | None, after: tuple[datetime, str] | None, li
         order by order_purchase_at desc, order_id desc
         limit %(limit)s
     """, {"status": status, "after_ts": after_ts, "after_id": after_id, "limit": limit + 1}).fetchall()
+
+
+def search_reviews(conn, vector: list[float], model_name: str, min_score: int | None,
+                   max_score: int | None, limit: int) -> list[dict]:
+    """Cei mai apropiați `limit` candidați după distanța cosinus (index HNSW).
+    Vectorul e trimis ca parametru text și convertit în SQL (::vector), fără concatenare."""
+    vector_literal = "[" + ",".join(f"{x:.8f}" for x in vector) + "]"
+    with conn.transaction():
+        # Implicit HNSW întoarce cel mult ef_search (40) rânduri; cu filtre pe scor, chiar mai puține.
+        # set_config(..., true) e local tranzacției; iterative_scan (pgvector >= 0.8) continuă
+        # căutarea până găsește destui candidați care trec de filtre.
+        conn.execute("select set_config('hnsw.ef_search', %s, true), "
+                     "set_config('hnsw.iterative_scan', 'relaxed_order', true)",
+                     (str(max(limit, 40) * 2),))
+        rows = conn.execute("""
+            select review_id, review_score, comment_text as text,
+                   (1 - (embedding <=> %(v)s::vector))::float8 as similarity
+            from core.review_embeddings
+            where model_name = %(model)s
+              and (%(min_score)s::int is null or review_score >= %(min_score)s::int)
+              and (%(max_score)s::int is null or review_score <= %(max_score)s::int)
+            order by embedding <=> %(v)s::vector
+            limit %(limit)s
+        """, {"v": vector_literal, "model": model_name, "min_score": min_score,
+              "max_score": max_score, "limit": limit}).fetchall()
+    # relaxed_order poate inversa ușor ordinea; o refacem exact.
+    return sorted(rows, key=lambda r: (-r["similarity"], r["review_id"]))

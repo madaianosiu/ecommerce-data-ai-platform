@@ -4,7 +4,7 @@ Aplicația NU folosește contul admin (POSTGRES_USER): se conectează ca API_DB_
 un rol read-only care vede doar schema core (vezi sql/init/04_api_role.sql).
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from psycopg.conninfo import make_conninfo
@@ -16,11 +16,19 @@ class Settings:
     db_port: str = "5432"
     db_name: str = ""
     db_user: str = ""
-    db_password: str = ""
-    api_key: str = ""
+    # Secretele au repr=False: nu apar dacă obiectul ajunge într-un log sau traceback.
+    db_password: str = field(default="", repr=False)
+    api_key: str = field(default="", repr=False)
     pool_min_size: int = 1
     pool_max_size: int = 5
     pool_timeout: float = 5.0  # secunde de așteptare pentru o conexiune din pool
+    # LLM pentru /v1/ask (vezi app/llm.py)
+    llm_provider: str = "gemini"
+    llm_model: str = ""
+    llm_fallback_model: str = ""
+    llm_api_key: str = field(default="", repr=False)
+    # Modelul de embedding se încarcă la pornire (lifespan); 0 = la primul /v1/ask (util în teste).
+    preload_embedder: bool = True
 
     def conninfo(self) -> str:
         return make_conninfo(
@@ -48,4 +56,9 @@ def get_settings() -> Settings:
         pool_min_size=int(os.getenv("API_POOL_MIN_SIZE", "1")),
         pool_max_size=int(os.getenv("API_POOL_MAX_SIZE", "5")),
         pool_timeout=float(os.getenv("API_POOL_TIMEOUT", "5")),
+        llm_provider=os.getenv("LLM_PROVIDER", "gemini").strip().lower(),
+        llm_model=os.getenv("LLM_MODEL", "").strip(),
+        llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "").strip(),
+        llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
+        preload_embedder=os.getenv("API_PRELOAD_EMBEDDER", "1").strip() not in ("0", "false", "no"),
     )

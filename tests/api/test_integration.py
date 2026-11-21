@@ -83,3 +83,31 @@ def test_api_role_cannot_write_core(live_settings):
     with psycopg.connect(live_settings.conninfo()) as conn:
         with pytest.raises((psycopg.errors.ReadOnlySqlTransaction, psycopg.errors.InsufficientPrivilege)):
             conn.execute("delete from core.fact_orders where false")
+
+
+def test_review_retrieval_as_api_reader(live_settings):
+    """Retrieval pentru /v1/ask, fără model: vectorul-întrebare e un embedding deja stocat,
+    deci recenzia lui trebuie să iasă prima, cu similaritate ~1."""
+    from psycopg.rows import dict_row
+
+    from app import queries
+    from app.embedder import MODEL_NAME
+
+    with psycopg.connect(live_settings.conninfo(), row_factory=dict_row, autocommit=True) as conn:
+        probe = conn.execute(
+            "select review_id, embedding::text as v from core.review_embeddings "
+            "where model_name = %s and review_score = 1 order by review_id limit 1", (MODEL_NAME,)).fetchone()
+        if probe is None:
+            pytest.skip("integration: core.review_embeddings is empty (run src/rag/embed_reviews.py)")
+        vector = [float(x) for x in probe["v"].strip("[]").split(",")]
+
+        rows = queries.search_reviews(conn, vector, MODEL_NAME, None, None, limit=10)
+        assert rows[0]["review_id"] == probe["review_id"] and rows[0]["similarity"] > 0.999
+        sims = [r["similarity"] for r in rows]
+        assert sims == sorted(sims, reverse=True)
+
+        # 120 candidați cu filtru pe scor. Măsurat cu setările implicite (ef_search=40, fără iterative
+        # scan): același query întoarce 40 de rânduri fără filtru și doar 2 cu filtrul 4-5.
+        filtered = queries.search_reviews(conn, vector, MODEL_NAME, 4, 5, limit=120)
+        assert len(filtered) == 120
+        assert all(4 <= r["review_score"] <= 5 for r in filtered)

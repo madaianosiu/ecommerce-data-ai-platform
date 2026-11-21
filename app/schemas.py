@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 
@@ -202,3 +202,53 @@ class OrdersPage(BaseModel):
     limit: int
     next_cursor: str | None = Field(description="Cursor pentru pagina următoare; null pe ultima pagină.")
     items: list[Order]
+
+
+# ---------------------------------------------------------------- /v1/ask (RAG)
+class AskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"question": "Why are customers unhappy with delivery?", "top_k": 15, "min_score": None, "max_score": 2},
+    ]})
+    question: str = Field(min_length=3, max_length=500,
+                          description="Întrebarea, în orice limbă (răspunsul vine în aceeași limbă).")
+    top_k: int = Field(15, ge=1, le=30, description="Câte recenzii-sursă (după deduplicare), 1-30.")
+    min_score: int | None = Field(None, ge=1, le=5, description="Scor minim al recenziei (1-5).")
+    max_score: int | None = Field(None, ge=1, le=5, description="Scor maxim al recenziei (1-5).")
+
+    @field_validator("question")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("question must contain at least 3 non-space characters")
+        return v
+
+    @model_validator(mode="after")
+    def _check_scores(self):
+        if self.min_score is not None and self.max_score is not None and self.min_score > self.max_score:
+            raise ValueError("'min_score' must be less than or equal to 'max_score'")
+        return self
+
+
+class AskSource(BaseModel):
+    review_id: str
+    review_score: int
+    text: str
+    similarity: float = Field(description="Similaritate cosinus cu întrebarea (1 = identic).")
+
+
+class AskResponse(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{
+        "route": "rag",
+        "answer": "Customers mostly complain about late deliveries [1][2] and orders that never arrived [3]. "
+                  "These are written reviews only, which skew toward low scores.",
+        "sources": [{"review_id": "a1074ef6...", "review_score": 1, "text": "Atraso na entrega",
+                     "similarity": 0.89}],
+        "retrieved_count": 60,
+        "notes": ["Sources are written reviews only ..."],
+    }]})
+    route: Literal["rag"] = Field("rag", description="Deocamdată mereu 'rag'; Etapa 9 adaugă rutarea SQL.")
+    answer: str
+    sources: list[AskSource] = Field(description="În ordinea citărilor: [1] = primul element.")
+    retrieved_count: int = Field(description="Candidați aduși din baza vectorială, înainte de deduplicare.")
+    notes: list[str]

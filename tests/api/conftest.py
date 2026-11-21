@@ -43,6 +43,8 @@ def _live_settings_or_skip() -> Settings:
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         pytest.skip(f"integration: missing env vars {missing} (run via dotenv)")
+    # Testele de integrare nu au nevoie de modelul de embedding (încărcarea durează zeci de secunde).
+    os.environ["API_PRELOAD_EMBEDDER"] = "0"
     get_settings.cache_clear()
     settings = get_settings()
     try:

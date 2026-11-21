@@ -2,7 +2,7 @@
 
 > An end-to-end data platform that turns raw e-commerce data into a trustworthy analytical model, then lets people ask business questions in plain language. Answers come from SQL (numbers) or RAG over customer reviews (reasons), with sources cited.
 
-**Status: work in progress.** Ingestion, the dbt models (staging + core star schema, with data tests) and the read-only data API are done and tested. The AI assistant (review embeddings, RAG, question routing) is next; see the [roadmap](#roadmap).
+**Status: work in progress.** Ingestion, the dbt models (staging + core star schema, with data tests), the read-only data API, review embeddings in pgvector and the RAG endpoint (`/v1/ask`) are done and tested. Next: routing questions between RAG and read-only text-to-SQL, then an evaluation set; see the [roadmap](#roadmap).
 
 ---
 
@@ -30,7 +30,7 @@ flowchart LR
     I --> J[LLM answer<br/>with cited sources]
 ```
 
-Built today: ingestion → `raw`, dbt → `core`, and the FastAPI data API. Embeddings, RAG and the question router are on the roadmap.
+Built today: ingestion → `raw`, dbt → `core`, the FastAPI data API, review embeddings in pgvector and RAG answers over reviews. The question router (RAG vs text-to-SQL) is on the roadmap.
 
 ## Tech stack
 
@@ -70,6 +70,7 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
 | `GET /v1/metrics/delivery-performance?state=SP` | Delivered orders, average delivery days, late orders and late percentage; `state` is optional |
 | `GET /v1/products/top?category=&limit=10&metric=revenue\|quantity` | Top products by revenue or units sold (`limit` up to 100) |
 | `GET /v1/orders?status=&limit=50&cursor=` | Orders, newest first, with cursor pagination (`limit` up to 200) |
+| `POST /v1/ask` | Natural-language question answered from customer reviews (RAG), with cited sources. Body: `{"question", "top_k" (default 15, max 30), "min_score", "max_score"}` |
 
 - **Authentication**: every endpoint except `/v1/health` requires an `X-API-Key` header. The key is compared in constant time, and a missing or wrong key returns `401`.
 - **Least-privilege database access**: the API connects as `api_reader`, a login role created by `sql/init/04_api_role.sql`. It has `SELECT` on the `core` tables only, no access to `raw` or `staging`, and read-only sessions. Default privileges keep the grant in place when dbt rebuilds the tables. The password comes from an environment variable and is never stored in SQL.
@@ -81,6 +82,14 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
   dotenv -f .env run -- uvicorn app.main:app --reload
   ```
 - **Known limitation**: the `state` filter in `/v1/metrics/delivery-performance` uses the customer's **current** address from `dim_customers`, which is the address on their most recent order. It does not use the address at the time of each order, so for customers who moved, an order can count toward their newer state.
+
+#### `/v1/ask`: questions over customer reviews (RAG)
+- **Retrieval**: the question is embedded with the same local model as the reviews (`intfloat/multilingual-e5-small`, loaded once at startup). It is matched by cosine similarity against the 40,641 embedded review texts in `core.review_embeddings`, queried as `api_reader`. Optional `min_score`/`max_score` filters apply. The API fetches 4× `top_k` candidates and drops near-identical texts (case, accent and punctuation-insensitive), so the sources are diverse.
+- **Generation**: a Gemini model (`LLM_MODEL`, e.g. `gemini-3.5-flash-lite`) answers using only the retrieved reviews and cites them as `[n]`, matching the order of `sources`. It answers in the language of the question and says when the evidence is insufficient. Review texts are passed inside delimiters as untrusted data, and any instructions inside them are ignored.
+- **Resilience**: retries on `429`/`503`/`504` (at most 2, exponential backoff, 30 s timeout), then one attempt with `LLM_FALLBACK_MODEL`. If both fail, the API returns `503` with a retry hint; a non-retryable LLM error returns `502`. When no review matches, it returns a "not enough evidence" answer without calling the LLM. The API key is never logged.
+- **Response**: `answer`, `sources` (`review_id`, `review_score`, `text`, `similarity`), `retrieved_count`, and `notes` (subset caveat, model used, token usage). `route` is always `"rag"` for now; SQL routing is the next stage.
+- **Limitation: the evidence skews negative.** Only reviews with a written comment can be retrieved: about 41% of all reviews. Unhappy customers write far more often, so 1-star reviews are 21% of written reviews vs 12% of all reviews. Answers describe what the retrieved reviews say, not how common an opinion is among all customers.
+- **Privacy note**: on the free Gemini API tier, Google may use prompts and responses to improve its products. That is acceptable here because the Olist reviews are a public dataset. Do not send private or customer data through a free-tier key.
 
 ![Auto-generated OpenAPI docs](docs/api-docs.png)
 
@@ -109,9 +118,10 @@ These issues are in the source data. Each one is handled in dbt and guarded by a
 - [x] REST API ingestion (Frankfurter) with retry and idempotent load
 - [x] dbt: staging models, star schema (`fact_order_items`, `fact_payments`, `fact_reviews`, dimensions, `dim_fx_daily`), data-quality tests
 - [ ] Orchestration (Airflow or Dagster), optional
-- [ ] Review embeddings stored in pgvector
+- [x] Review embeddings stored in pgvector
 - [x] Data API (FastAPI): metrics, filters, cursor pagination, API-key auth, read-only DB role, pytest
-- [ ] `/v1/ask`: question routing to RAG or read-only text-to-SQL, answers with cited reviews
+- [x] `/v1/ask` RAG endpoint: semantic search over reviews, answers with cited reviews, retry + fallback model
+- [ ] `/v1/ask` question routing: RAG or read-only text-to-SQL
 - [ ] Evaluation on a set of 20–30 test questions
 - [ ] CI (GitHub Actions), containerized app, architecture write-up
 
@@ -148,16 +158,24 @@ dotenv -f ../.env run -- dbt test
 cd ..
 
 # 7. Existing database only: sql/init/ runs only on a new volume, so create
-#    the api_reader role once by hand (safe to re-run)
+#    the api_reader role and the embeddings table once by hand (both safe to re-run)
 dotenv -f .env run -- docker compose exec -T -e API_DB_PASSWORD db \
   sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/04_api_role.sql'
+docker compose exec -T db \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/05_pgvector.sql'
 
-# 8. Start the data API, then open http://127.0.0.1:8000/docs
-#    Call protected endpoints with the header  X-API-Key: <your API_KEY>
+# 8. Embed the review texts (downloads the ~470 MB model once into .cache/; safe to re-run)
+python src/rag/embed_reviews.py
+
+# 9. Check the LLM key (LLM_PROVIDER, LLM_MODEL, LLM_API_KEY in .env): sends one tiny request
+python src/rag/check_llm.py
+
+# 10. Start the data API, then open http://127.0.0.1:8000/docs
+#     Call protected endpoints with the header  X-API-Key: <your API_KEY>
 dotenv -f .env run -- uvicorn app.main:app --reload
 
-# 9. Run the tests (integration tests against the database are skipped
-#    automatically when it is not reachable)
+# 11. Run the tests (integration tests against the database are skipped
+#     automatically when it is not reachable; the LLM is always mocked)
 dotenv -f .env run -- pytest
 ```
 
@@ -171,7 +189,12 @@ sql/init/                     Database initialization, run on a fresh volume in 
   02_raw_tables.sql             raw tables for the Olist CSVs
   03_fx_tables.sql              raw.fx_rates_raw and raw.fx_rates
   04_api_role.sql               read-only api_reader role for the data API
+  05_pgvector.sql               core.review_embeddings (vector(384)) + HNSW cosine index
 src/ingest/                   Ingestion scripts (CSV loader, Frankfurter API, data inspection)
+src/rag/                      Review embeddings and LLM tooling
+  embed_reviews.py              embeds review texts into pgvector (repeatable, logged)
+  search_reviews.py             command-line semantic search over reviews
+  check_llm.py                  one-request check of the Gemini key and model
 dbt/                          dbt project
   models/staging/               stg_* views over raw (renames, casts) + sources
   models/core/                  star schema: dim_*, fact_*, reconciliation model
@@ -181,9 +204,11 @@ app/                          FastAPI data API
   main.py, config.py, db.py     app setup, settings, connection pool
   auth.py, schemas.py           X-API-Key auth, Pydantic models
   queries.py, pagination.py     parameterized SQL, keyset cursor
-  routers/                      health, metrics, products, orders
+  embedder.py, llm.py, rag.py   question embedding, Gemini client (retry + fallback), RAG prompts
+  routers/                      health, metrics, products, orders, ask
 tests/                        pytest tests (ingestion helpers)
-  api/                          API tests (auth, validation, pagination, responses, integration)
+  api/                          API tests (auth, validation, pagination, responses, /v1/ask, integration)
+  rag/                          embedding script and LLM check tests
 ```
 
 ## Design decisions
