@@ -104,8 +104,9 @@ def ask(
 
     candidates = [Candidate(r["review_id"], r["review_score"], r["text"], r["similarity"]) for r in rows]
     sources = dedupe_candidates(candidates, body.top_k)
-    source_models = [AskSource(review_id=s.review_id, review_score=s.review_score, text=s.text,
-                               similarity=round(s.similarity, 4)) for s in sources]
+    # n = aceeași numerotare ca <review id="n"> din prompt (build_user_prompt), deci ca [n] din răspuns.
+    source_models = [AskSource(n=i, review_id=s.review_id, review_score=s.review_score, text=s.text,
+                               similarity=round(s.similarity, 4)) for i, s in enumerate(sources, start=1)]
 
     if not sources:
         return AskResponse(answer=NOT_ENOUGH_EVIDENCE, sources=[], retrieved_count=len(rows),

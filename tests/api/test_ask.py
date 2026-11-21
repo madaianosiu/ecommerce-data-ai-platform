@@ -175,6 +175,23 @@ def test_answer_sources_order_and_notes(client, auth_headers, ask_env):
     assert ask_env.embedder.calls == ["Why are customers unhappy with delivery?"]
 
 
+def test_source_n_is_sequential_and_matches_prompt_citations(client, auth_headers, ask_env):
+    ask_env.rows = [{"review_id": f"r{i}", "review_score": 1 + i % 5, "text": f"Problema distinto {i}",
+                     "similarity": 0.99 - i / 100} for i in range(12)]
+    body = post(client, auth_headers, question="Why late?", top_k=10).json()
+    sources = body["sources"]
+    assert [s["n"] for s in sources] == list(range(1, 11))          # 1, 2, ... fără goluri
+    assert [s["review_id"] for s in sources] == [f"r{i}" for i in range(10)]   # n urmează ordinea listei
+    _, user_prompt = ask_env.llm.calls[0]
+    for s in sources:  # [n] din răspuns = <review id="n"> din prompt = sursa cu același n
+        assert f'<review id="{s["n"]}" score="{s["review_score"]}">{s["text"]}</review>' in user_prompt
+
+
+def test_source_n_counts_after_deduplication(client, auth_headers, ask_env):
+    body = post(client, auth_headers, question="Why late?").json()
+    assert [(s["n"], s["review_id"]) for s in body["sources"]] == [(1, "r1"), (2, "r3"), (3, "r4")]
+
+
 def test_filters_and_candidate_count_reach_the_query(client, auth_headers, ask_env):
     post(client, auth_headers, question="Why late?", top_k=5, min_score=1, max_score=2)
     assert ask_env.search_args == ("intfloat/multilingual-e5-small", 1, 2, 20)

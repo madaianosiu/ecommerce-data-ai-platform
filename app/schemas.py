@@ -231,6 +231,7 @@ class AskRequest(BaseModel):
 
 
 class AskSource(BaseModel):
+    n: int = Field(ge=1, description="Numărul citării (1, 2, ...), corespunde marcajelor [n] din answer.")
     review_id: str
     review_score: int
     text: str
@@ -242,7 +243,7 @@ class AskResponse(BaseModel):
         "route": "rag",
         "answer": "Customers mostly complain about late deliveries [1][2] and orders that never arrived [3]. "
                   "These are written reviews only, which skew toward low scores.",
-        "sources": [{"review_id": "a1074ef6...", "review_score": 1, "text": "Atraso na entrega",
+        "sources": [{"n": 1, "review_id": "a1074ef6...", "review_score": 1, "text": "Atraso na entrega",
                      "similarity": 0.89}],
         "retrieved_count": 60,
         "notes": ["Sources are written reviews only ..."],
