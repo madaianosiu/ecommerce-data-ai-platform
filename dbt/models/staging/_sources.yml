@@ -4,31 +4,31 @@ sources:
   - name: raw
     schema: raw
     description: >
-      Date brute, încărcate 1:1 din CSV-urile Olist (src/ingest/load_csv.py, toate coloanele text)
-      și din API-ul Frankfurter (src/ingest/ingest_fx.py).
+      Raw data, loaded 1:1 from the Olist CSVs (src/ingest/load_csv.py, all columns as text)
+      and from the Frankfurter API (src/ingest/ingest_fx.py).
     tables:
       - name: orders
-        description: Comenzi Olist, un rând per comandă.
+        description: Olist orders, one row per order.
       - name: order_items
-        description: Linii de comandă; cheie (order_id, order_item_id).
+        description: Order lines; key (order_id, order_item_id).
       - name: order_payments
-        description: Plăți per comandă; cheie (order_id, payment_sequential).
+        description: Payments per order; key (order_id, payment_sequential).
       - name: order_reviews
-        description: Recenzii; review_id NU e unic în sursă (aceeași recenzie apare pe mai multe comenzi).
+        description: Reviews; review_id is NOT unique in the source (the same review appears on several orders).
       - name: customers
-        description: Clienți; customer_id e per comandă, customer_unique_id identifică persoana.
+        description: Customers; customer_id is per order, customer_unique_id identifies the person.
       - name: products
-        description: Catalog produse (coloanele *_lenght păstrează typo-ul din dataset-ul original).
+        description: Product catalogue (the *_lenght columns keep the typo from the original dataset).
       - name: sellers
-        description: Vânzători.
+        description: Sellers.
       - name: geolocation
-        description: Coordonate per prefix de cod poștal; mai multe rânduri per prefix, fără cheie.
+        description: Coordinates per zip code prefix; several rows per prefix, no key.
       - name: category_translation
-        description: Traducerea numelor de categorie din portugheză în engleză.
+        description: Translation of category names from Portuguese to English.
       - name: fx_rates
         description: >
-          Cursuri zilnice ECB prin Frankfurter, doar zile lucrătoare; cheie (rate_date, base, quote).
-          Încărcat prin UPSERT, deci _loaded_at reflectă ultima rulare a ingestiei.
+          Daily ECB rates via Frankfurter, business days only; key (rate_date, base, quote).
+          Loaded by UPSERT, so _loaded_at reflects the latest ingestion run.
         config:
           loaded_at_field: _loaded_at
           freshness:

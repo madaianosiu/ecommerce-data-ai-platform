@@ -1,4 +1,4 @@
-"""Modele Pydantic: parametri de query (validare) și răspunsuri (OpenAPI + serializare)."""
+"""Pydantic models: query parameters (validation) and responses (OpenAPI + serialization)."""
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -6,12 +6,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 
-# Sumele vin din Postgres ca numeric (Decimal, rotunjite la 2 zecimale în SQL);
-# în JSON le trimitem ca numere, nu ca string-uri.
+# Amounts come from Postgres as numeric (Decimal, rounded to 2 decimals in SQL);
+# in JSON we send them as numbers, not strings.
 Money = Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
 
 
-# ---------------------------------------------------------------- enum-uri
+# ---------------------------------------------------------------- enums
 class Granularity(str, Enum):
     day = "day"
     month = "month"
@@ -40,32 +40,32 @@ class OrderStatus(str, Enum):
 
 
 class BrazilState(str, Enum):
-    """Cele 27 de unități federative ale Braziliei (codul din customer_state)."""
+    """The 27 federative units of Brazil (the code in customer_state)."""
     AC = "AC"; AL = "AL"; AP = "AP"; AM = "AM"; BA = "BA"; CE = "CE"; DF = "DF"  # noqa: E702
     ES = "ES"; GO = "GO"; MA = "MA"; MT = "MT"; MS = "MS"; MG = "MG"; PA = "PA"  # noqa: E702
     PB = "PB"; PR = "PR"; PE = "PE"; PI = "PI"; RJ = "RJ"; RN = "RN"; RS = "RS"  # noqa: E702
     RO = "RO"; RR = "RR"; SC = "SC"; SP = "SP"; SE = "SE"; TO = "TO"  # noqa: E702
 
 
-# ---------------------------------------------------------------- parametri
+# ---------------------------------------------------------------- parameters
 class _QueryModel(BaseModel):
-    # Parametrii necunoscuți (ex. un typo ca "granularty") dau 422 în loc să fie ignorați.
+    # Unknown parameters (e.g. a typo like "granularty") return 422 instead of being ignored.
     model_config = ConfigDict(extra="forbid")
 
 
 class RevenueParams(_QueryModel):
     date_from: date | None = Field(
         None, alias="from",
-        description="Prima zi inclusă (data cumpărării comenzii), YYYY-MM-DD. Implicit: fără limită.",
+        description="First day included (order purchase date), YYYY-MM-DD. Default: no limit.",
         examples=["2017-01-01"],
     )
     date_to: date | None = Field(
         None, alias="to",
-        description="Ultima zi inclusă, YYYY-MM-DD. Implicit: fără limită.",
+        description="Last day included, YYYY-MM-DD. Default: no limit.",
         examples=["2017-12-31"],
     )
-    granularity: Granularity = Field(Granularity.month, description="Mărimea perioadei din serie.")
-    currency: Currency = Field(Currency.BRL, description="Moneda sumelor (EUR la cursul din ziua cumpărării).")
+    granularity: Granularity = Field(Granularity.month, description="Size of each period in the series.")
+    currency: Currency = Field(Currency.BRL, description="Currency of the amounts (EUR at the purchase-day rate).")
 
     @model_validator(mode="after")
     def _check_range(self):
@@ -77,7 +77,7 @@ class RevenueParams(_QueryModel):
 class DeliveryParams(_QueryModel):
     state: BrazilState | None = Field(
         None,
-        description="Statul clientului (cod UF din 2 litere, ex. SP). Implicit: toată Brazilia.",
+        description="Customer's state (2-letter UF code, e.g. SP). Default: all of Brazil.",
         examples=["SP"],
     )
 
@@ -90,24 +90,24 @@ class DeliveryParams(_QueryModel):
 class TopProductsParams(_QueryModel):
     category: str | None = Field(
         None, min_length=1, max_length=100, pattern=r"^[a-z0-9_]+$",
-        description="Categoria produsului (dim_products.product_category), ex. health_beauty; "
-                    "'unknown' pentru produsele fără categorie.",
+        description="Product category (dim_products.product_category), e.g. health_beauty; "
+                    "'unknown' for products without a category.",
         examples=["health_beauty"],
     )
-    limit: int = Field(10, ge=1, le=100, description="Câte produse (1-100).")
-    metric: TopMetric = Field(TopMetric.revenue, description="Criteriul de ordonare.")
+    limit: int = Field(10, ge=1, le=100, description="How many products (1-100).")
+    metric: TopMetric = Field(TopMetric.revenue, description="Sort criterion.")
 
 
 class OrdersParams(_QueryModel):
-    status: OrderStatus | None = Field(None, description="Filtru pe order_status.", examples=["delivered"])
-    limit: int = Field(50, ge=1, le=200, description="Mărimea paginii (1-200).")
+    status: OrderStatus | None = Field(None, description="Filter on order_status.", examples=["delivered"])
+    limit: int = Field(50, ge=1, le=200, description="Page size (1-200).")
     cursor: str | None = Field(
         None, max_length=500,
-        description="Valoarea next_cursor din răspunsul anterior. Lipsește pentru prima pagină.",
+        description="The next_cursor value from the previous response. Omit it for the first page.",
     )
 
 
-# ---------------------------------------------------------------- răspunsuri
+# ---------------------------------------------------------------- responses
 class ErrorResponse(BaseModel):
     detail: str = Field(examples=["Database unavailable"])
 
@@ -118,7 +118,7 @@ class HealthResponse(BaseModel):
 
 
 class RevenuePoint(BaseModel):
-    period: date = Field(description="Începutul perioadei (zi / prima zi din lună / an).")
+    period: date = Field(description="Start of the period (day / first day of the month / year).")
     revenue: Money
     orders: int
     items: int
@@ -137,7 +137,7 @@ class RevenueResponse(BaseModel):
     granularity: Granularity
     date_from: date | None = Field(serialization_alias="from")
     date_to: date | None = Field(serialization_alias="to")
-    total_revenue: Money = Field(description="Venit = sum(price) pe comenzile care nu sunt canceled/unavailable.")
+    total_revenue: Money = Field(description="Revenue = sum(price) over orders that are not canceled/unavailable.")
     orders: int
     items: int
     series: list[RevenuePoint]
@@ -149,18 +149,18 @@ class DeliveryPerformance(BaseModel):
         "late_pct": 5.9, "excluded_missing_delivery_date": 2,
     }]})
     state: BrazilState | None
-    orders: int = Field(description="Comenzi livrate (status delivered) cu dată de livrare.")
-    avg_delivery_days: float | None = Field(description="Media zilelor de la cumpărare la livrare.")
+    orders: int = Field(description="Delivered orders (status delivered) with a delivery date.")
+    avg_delivery_days: float | None = Field(description="Average days from purchase to delivery.")
     late_orders: int
-    late_pct: float | None = Field(description="Procentul de comenzi livrate după data estimată.")
+    late_pct: float | None = Field(description="Percentage of orders delivered after the estimated date.")
     excluded_missing_delivery_date: int = Field(
-        description="Comenzi 'delivered' fără dată de livrare, excluse din calcul.")
+        description="'delivered' orders without a delivery date, excluded from the calculation.")
 
 
 class TopProduct(BaseModel):
     product_id: str
     product_category: str
-    quantity: int = Field(description="Număr de unități vândute (linii de comandă).")
+    quantity: int = Field(description="Number of units sold (order lines).")
     revenue_brl: Money
     revenue_eur: Money
 
@@ -200,7 +200,7 @@ class OrdersPage(BaseModel):
         }],
     }]})
     limit: int
-    next_cursor: str | None = Field(description="Cursor pentru pagina următoare; null pe ultima pagină.")
+    next_cursor: str | None = Field(description="Cursor for the next page; null on the last page.")
     items: list[Order]
 
 
@@ -210,10 +210,10 @@ class AskRequest(BaseModel):
         {"question": "Why are customers unhappy with delivery?", "top_k": 15, "min_score": None, "max_score": 2},
     ]})
     question: str = Field(min_length=3, max_length=500,
-                          description="Întrebarea, în orice limbă (răspunsul vine în aceeași limbă).")
-    top_k: int = Field(15, ge=1, le=30, description="Câte recenzii-sursă (după deduplicare), 1-30.")
-    min_score: int | None = Field(None, ge=1, le=5, description="Scor minim al recenziei (1-5).")
-    max_score: int | None = Field(None, ge=1, le=5, description="Scor maxim al recenziei (1-5).")
+                          description="The question, in any language (the answer comes back in the same language).")
+    top_k: int = Field(15, ge=1, le=30, description="How many source reviews (after deduplication), 1-30.")
+    min_score: int | None = Field(None, ge=1, le=5, description="Minimum review score (1-5).")
+    max_score: int | None = Field(None, ge=1, le=5, description="Maximum review score (1-5).")
 
     @field_validator("question")
     @classmethod
@@ -231,11 +231,11 @@ class AskRequest(BaseModel):
 
 
 class AskSource(BaseModel):
-    n: int = Field(ge=1, description="Numărul citării (1, 2, ...), corespunde marcajelor [n] din answer.")
+    n: int = Field(ge=1, description="Citation number (1, 2, ...), matching the [n] markers in answer.")
     review_id: str
     review_score: int
     text: str
-    similarity: float = Field(description="Similaritate cosinus cu întrebarea (1 = identic).")
+    similarity: float = Field(description="Cosine similarity to the question (1 = identical).")
 
 
 class AskResponse(BaseModel):
@@ -248,10 +248,10 @@ class AskResponse(BaseModel):
         "retrieved_count": 60,
         "notes": ["Sources are written reviews only ..."],
     }]})
-    route: Literal["rag"] = Field("rag", description="Ruta aleasă de router: 'rag' = răspuns din recenzii.")
+    route: Literal["rag"] = Field("rag", description="Route chosen by the router: 'rag' = answered from reviews.")
     answer: str
-    sources: list[AskSource] = Field(description="În ordinea citărilor: [1] = primul element.")
-    retrieved_count: int = Field(description="Candidați aduși din baza vectorială, înainte de deduplicare.")
+    sources: list[AskSource] = Field(description="In citation order: [1] = the first item.")
+    retrieved_count: int = Field(description="Candidates fetched from the vector store, before deduplication.")
     notes: list[str]
 
 
@@ -267,8 +267,8 @@ class SqlAskResponse(BaseModel):
     }]})
     route: Literal["sql"] = "sql"
     answer: str
-    sql: str | None = Field(description="Interogarea executată (validată, cu LIMIT 200); null dacă nu s-a putut răspunde.")
-    rows: list[dict[str, Any]] = Field(description="Rândurile rezultatului, maxim 200.")
+    sql: str | None = Field(description="The executed query (validated, with LIMIT 200); null if the question could not be answered.")
+    rows: list[dict[str, Any]] = Field(description="The result rows, at most 200.")
     row_count: int
     notes: list[str]
 

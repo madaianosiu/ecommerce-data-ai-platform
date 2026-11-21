@@ -1,11 +1,11 @@
-"""Teste pe baza reală, prin rolul api_reader. Se sar automat dacă baza nu e disponibilă.
-Rulare: .venv\\Scripts\\dotenv -f .env run -- pytest -m integration"""
+"""Tests against the real database, through the api_reader role. Skipped automatically if it is unavailable.
+Run: .venv\\Scripts\\dotenv -f .env run -- pytest -m integration"""
 import psycopg
 import pytest
 
 pytestmark = pytest.mark.integration
 
-# Cifre reconciliate în dbt (README, _core.yml): venit = sum(price) fără canceled/unavailable.
+# Figures reconciled in dbt (README, _core.yml): revenue = sum(price) without canceled/unavailable.
 REVENUE_BRL = 13494400.74
 REVENUE_EUR = 3424922.94
 
@@ -38,7 +38,7 @@ def test_delivery_performance(live_client):
     assert overall["state"] is None and sp["state"] == "SP"
     assert 0 < sp["orders"] < overall["orders"]
     assert 0 <= sp["late_pct"] <= 100 and sp["avg_delivery_days"] > 0
-    assert overall["excluded_missing_delivery_date"] == 8  # cifra din dbt / README
+    assert overall["excluded_missing_delivery_date"] == 8  # the figure from dbt / README
 
 
 def test_top_products_sorted(live_client):
@@ -86,8 +86,8 @@ def test_api_role_cannot_write_core(live_settings):
 
 
 def test_review_retrieval_as_api_reader(live_settings):
-    """Retrieval pentru /v1/ask, fără model: vectorul-întrebare e un embedding deja stocat,
-    deci recenzia lui trebuie să iasă prima, cu similaritate ~1."""
+    """Retrieval for /v1/ask, without the model: the query vector is an already stored embedding,
+    so its own review must come first, with similarity ~1."""
     from psycopg.rows import dict_row
 
     from app import queries
@@ -106,16 +106,16 @@ def test_review_retrieval_as_api_reader(live_settings):
         sims = [r["similarity"] for r in rows]
         assert sims == sorted(sims, reverse=True)
 
-        # 120 candidați cu filtru pe scor. Măsurat cu setările implicite (ef_search=40, fără iterative
-        # scan): același query întoarce 40 de rânduri fără filtru și doar 2 cu filtrul 4-5.
+        # 120 candidates with a score filter. Measured with the default settings (ef_search=40, no iterative
+        # scan): the same query returns 40 rows without a filter and only 2 with the 4-5 filter.
         filtered = queries.search_reviews(conn, vector, MODEL_NAME, 4, 5, limit=120)
         assert len(filtered) == 120
         assert all(4 <= r["review_score"] <= 5 for r in filtered)
 
 
 def test_sql_route_revenue_matches_metrics_endpoint(live_client, live_settings):
-    """Ruta sql cap-coadă pe baza reală (validator + executor read-only ca api_reader), cu LLM-ul
-    scriptat (fără rețea): venitul trebuie să fie identic cu /v1/metrics/revenue."""
+    """The sql route end to end on the real database (validator + read-only executor as api_reader), with the
+    LLM scripted (no network): revenue must be identical to /v1/metrics/revenue."""
     from contextlib import contextmanager
 
     from psycopg.rows import dict_row

@@ -1,6 +1,6 @@
-"""Teste pentru src/rag/embed_reviews.py.
-Funcțiile pure nu au nevoie nici de model, nici de bază. Testul de integrare se sare automat
-dacă baza nu e disponibilă sau dacă embed_reviews.py nu a fost încă rulat."""
+"""Tests for src/rag/embed_reviews.py.
+The pure functions need neither the model nor the database. The integration test is skipped
+automatically if the database is unavailable or embed_reviews.py has not been run yet."""
 import os
 
 import psycopg
@@ -59,8 +59,8 @@ def test_dedupe_one_per_review_id_and_skips_empty():
     rows = [
         ("r2", "Bom", 4),
         ("r1", "Atrasou", 1),
-        ("r2", "Bom", 4),       # același review_id pe altă comandă
-        ("r3", "   ", 5),       # text gol după curățare
+        ("r2", "Bom", 4),       # the same review_id on another order
+        ("r3", "   ", 5),       # empty text after cleaning
         ("r4", None, 3),
     ]
     assert dedupe_reviews(rows) == [Review("r1", "Atrasou", 1), Review("r2", "Bom", 4)]
@@ -80,13 +80,13 @@ def test_second_run_selects_nothing():
     assert select_new(reviews, after_first_run) == []
 
 
-# ---------------------------------------------------------------- integrare
+# ---------------------------------------------------------------- integration
 @pytest.fixture(scope="module")
 def db_conn():
     from rag.embed_reviews import connect  # load_csv.connect: .env + POSTGRES_*
 
-    # load_csv.connect nu setează timeout; libpq citește PGCONNECT_TIMEOUT, deci testul se sare
-    # în câteva secunde (nu minute) când baza nu răspunde.
+    # load_csv.connect sets no timeout; libpq reads PGCONNECT_TIMEOUT, so the test is skipped
+    # within seconds (not minutes) when the database does not respond.
     os.environ.setdefault("PGCONNECT_TIMEOUT", "3")
     try:
         conn = connect()
@@ -109,11 +109,11 @@ def db_conn():
 def test_every_review_with_text_is_embedded_exactly_once(db_conn):
     reviews = fetch_reviews(db_conn)
     existing = fetch_existing_ids(db_conn, MODEL_NAME)
-    assert select_new(reviews, existing) == []          # o nouă rulare nu ar mai avea nimic de făcut
-    assert existing == {r.review_id for r in reviews}   # și nu există rânduri în plus
+    assert select_new(reviews, existing) == []          # a new run would have nothing left to do
+    assert existing == {r.review_id for r in reviews}   # and there are no extra rows
 
-    # bad_text folosește echivalentul SQL al clean_text: întâi orice spațiu alb -> ' ', apoi trim
-    # (trim() din Postgres scoate doar spații, nu și CR/LF, deci ordinea contează).
+    # bad_text uses the SQL equivalent of clean_text: first any whitespace -> ' ', then trim
+    # (Postgres trim() removes only spaces, not CR/LF, so the order matters).
     with db_conn.transaction():
         dims, min_norm, max_norm, bad_text = db_conn.execute("""
             select min(vector_dims(e.embedding)), min(vector_norm(e.embedding)), max(vector_norm(e.embedding)),
@@ -125,5 +125,5 @@ def test_every_review_with_text_is_embedded_exactly_once(db_conn):
             where e.model_name = %s
         """, (MODEL_NAME,)).fetchone()
     assert dims == EMBEDDING_DIM
-    assert 0.999 < min_norm <= max_norm < 1.001  # vectori normalizați
+    assert 0.999 < min_norm <= max_norm < 1.001  # normalized vectors
     assert bad_text == 0

@@ -1,5 +1,5 @@
--- Reconciliere: comenzi care au plăți dar nicio linie în fact_order_items.
--- Explică diferența dintre totalul plăților și items + freight; faptele rămân neatinse.
+-- Reconciliation: orders that have payments but no row in fact_order_items.
+-- Explains the difference between total payments and items + freight; the facts are untouched.
 select
     o.order_id,
     o.order_status,

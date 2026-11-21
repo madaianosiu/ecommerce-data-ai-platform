@@ -1,9 +1,9 @@
-"""Logica RAG pentru /v1/ask, ca funcții pure (testabile fără model, bază sau LLM)."""
+"""RAG logic for /v1/ask, as pure functions (testable without a model, database or LLM)."""
 import re
 import unicodedata
 from dataclasses import dataclass
 
-CANDIDATE_MULTIPLIER = 4     # aducem mai mulți candidați decât top_k, apoi deduplicăm
+CANDIDATE_MULTIPLIER = 4     # fetch more candidates than top_k, then deduplicate
 MAX_CANDIDATES = 120
 
 SYSTEM_PROMPT = """You answer business questions about an e-commerce marketplace using ONLY customer reviews.
@@ -33,10 +33,10 @@ class Candidate:
     similarity: float
 
 
-# ---------------------------------------------------------------- deduplicare
+# ---------------------------------------------------------------- deduplication
 def normalize_for_dedup(text: str) -> str:
-    """Chei egale pentru texte aproape identice: fără diacritice, litere mici,
-    fără punctuație, spații comprimate ("Ótimo produto!!" == "otimo produto")."""
+    """Equal keys for near-identical texts: no diacritics, lowercase,
+    no punctuation, collapsed spaces ("Ótimo produto!!" == "otimo produto")."""
     decomposed = unicodedata.normalize("NFKD", text)
     no_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
     words = re.sub(r"[\W_]+", " ", no_accents.casefold())
@@ -44,8 +44,8 @@ def normalize_for_dedup(text: str) -> str:
 
 
 def dedupe_candidates(candidates: list[Candidate], top_k: int) -> list[Candidate]:
-    """Ordonează după similaritate (desc, apoi review_id) și păstrează primul text din fiecare
-    grup de texte aproape identice, până la top_k surse."""
+    """Sort by similarity (desc, then review_id) and keep the first text of each
+    group of near-identical texts, up to top_k sources."""
     ordered = sorted(candidates, key=lambda c: (-c.similarity, c.review_id))
     seen: set[str] = set()
     out: list[Candidate] = []
@@ -66,7 +66,7 @@ def candidate_limit(top_k: int) -> int:
 
 # ---------------------------------------------------------------- prompt
 def _neutralize(text: str) -> str:
-    """Textul recenziei nu poate închide/deschide delimitatorii (ex. '</reviews>')."""
+    """Review text cannot close or open the delimiters (e.g. '</reviews>')."""
     return text.replace("<", "‹").replace(">", "›")
 
 
@@ -74,9 +74,9 @@ def build_user_prompt(question: str, sources: list[Candidate]) -> str:
     lines = [f"<question>{_neutralize(question)}</question>", "", "<reviews>"]
     for i, s in enumerate(sources, start=1):
         lines.append(f'<review id="{i}" score="{s.review_score}">{_neutralize(s.text)}</review>')
-    # Limba răspunsului, observat la rulare: cu recenziile în portugheză, întrebările în engleză primeau
-    # răspuns în portugheză; după o instrucțiune finală în engleză, întrebările în portugheză primeau
-    # o primă frază în engleză. De aceea promptul se încheie cu întrebarea însăși.
+    # Answer language, observed in real runs: with Portuguese reviews, English questions got
+    # Portuguese answers; after a final instruction in English, Portuguese questions got an
+    # English first sentence. That is why the prompt ends with the question itself.
     lines += ["</reviews>", "",
               f"Answer using only reviews [1]-[{len(sources)}] above, citing them as [n]. "
               "Write every sentence, including the first one, in the language of the question below "

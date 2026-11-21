@@ -1,7 +1,7 @@
-"""Ingestie cursuri valutare din Frankfurter API în raw.fx_rates_raw / raw.fx_rates.
+"""Ingest exchange rates from the Frankfurter API into raw.fx_rates_raw / raw.fx_rates.
 
-Tabelele sunt definite în sql/init/03_fx_tables.sql.
-Rulare: python src/ingest/ingest_fx.py --start 2016-09-01 --end 2018-10-31
+The tables are defined in sql/init/03_fx_tables.sql.
+Run: python src/ingest/ingest_fx.py --start 2016-09-01 --end 2018-10-31
 """
 import argparse
 import sys
@@ -13,20 +13,20 @@ from psycopg.types.json import Jsonb
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Aceeași conexiune (.env + POSTGRES_*), același DDL și același format de log ca load_csv.py.
+# Same connection (.env + POSTGRES_*), same DDL and same log format as load_csv.py.
 from load_csv import LOG_DDL, connect, write_log
 
 BASE_URL = "https://api.frankfurter.dev/v1"
 TABLE = "fx_rates"
 WINDOW_DAYS = 90
-TIMEOUT = (5, 30)  # (connect, read) în secunde
+TIMEOUT = (5, 30)  # (connect, read) in seconds
 
 
 def make_session():
     retry = Retry(
         total=5,
-        backoff_factor=1.0,  # 0s, 2s, 4s, 8s, 16s între încercări
-        # 520-524: erori Cloudflare când originea Frankfurter nu răspunde (tranzitorii)
+        backoff_factor=1.0,  # 0s, 2s, 4s, 8s, 16s between attempts
+        # 520-524: Cloudflare errors when the Frankfurter origin does not respond (transient)
         status_forcelist=(429, 500, 502, 503, 504, 520, 521, 522, 523, 524),
         allowed_methods=("GET",),
         respect_retry_after_header=True,
@@ -37,7 +37,7 @@ def make_session():
 
 
 def date_windows(start, end, size=WINDOW_DAYS):
-    """Împarte [start, end] în ferestre consecutive de max `size` zile, fără suprapunere."""
+    """Split [start, end] into consecutive windows of at most `size` days, without overlap."""
     if size < 1:
         raise ValueError("size must be >= 1")
     cur = start
@@ -57,9 +57,9 @@ def fetch_window(session, start, end, base, quote):
 def flatten_rates(payload, base, start=None, end=None):
     """{'rates': {'2017-01-02': {'EUR': 0.29}}} -> [(date, base, quote, rate)]
 
-    Dacă fereastra începe într-o zi fără curs (weekend/sărbătoare), Frankfurter mută
-    start_date la ultima zi lucrătoare anterioară, care aparține ferestrei precedente.
-    Cu start/end, păstrăm doar zilele din fereastra cerută.
+    If the window starts on a day without a rate (weekend/holiday), Frankfurter moves
+    start_date back to the previous business day, which belongs to the previous window.
+    With start/end, we keep only the days of the requested window.
     """
     rows = []
     for day, quotes in payload.get("rates", {}).items():
@@ -101,7 +101,7 @@ def write_etl_log(conn, run_id, source, expected, loaded, status, error, started
 
 
 def ingest(conn, session, start, end, base, quote):
-    """Returnează (expected, loaded). JSON-ul brut se salvează înaintea transformării."""
+    """Return (expected, loaded). The raw JSON is saved before the transformation."""
     expected = loaded = 0
     for w_start, w_end in date_windows(start, end):
         url, payload = fetch_window(session, w_start, w_end, base, quote)
@@ -139,7 +139,7 @@ def main():
             expected, loaded = ingest(conn, make_session(), args.start, args.end,
                                       args.base, args.quote)
             status, error = "success", None
-        except Exception as exc:  # fiecare conn.transaction() a făcut deja rollback
+        except Exception as exc:  # every conn.transaction() has already rolled back
             status, error = "failed", str(exc)
 
         write_etl_log(conn, run_id, source, expected, loaded, status, error, started)

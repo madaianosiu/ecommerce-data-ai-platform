@@ -1,7 +1,7 @@
--- Grain: un rând per client real (customer_unique_id).
--- În Olist customer_id se generează per comandă, deci un client cu 3 comenzi are 3 customer_id.
--- Legătura customer_id -> customer_unique_id rămâne în fact_orders (ambele coloane).
--- Adresa: cea din comanda cea mai recentă (252 de clienți au adrese diferite între comenzi).
+-- Grain: one row per real customer (customer_unique_id).
+-- In Olist, customer_id is generated per order, so a customer with 3 orders has 3 customer_ids.
+-- The customer_id -> customer_unique_id link stays in fact_orders (both columns).
+-- Address: the one from the most recent order (252 customers have different addresses across orders).
 with customer_orders as (
     select
         c.customer_id,

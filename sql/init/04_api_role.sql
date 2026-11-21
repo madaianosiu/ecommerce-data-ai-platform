@@ -1,8 +1,8 @@
--- Rol read-only pentru data API (FastAPI): poate citi DOAR tabelele din schema core.
--- Parola vine din variabila de mediu API_DB_PASSWORD (meta-comanda psql \getenv, psql >= 15),
--- deci nu apare în acest fișier. Idempotent: poate fi rulat de mai multe ori.
+-- Read-only role for the data API (FastAPI): it can read ONLY the tables in schema core.
+-- The password comes from the API_DB_PASSWORD environment variable (psql meta-command \getenv,
+-- psql >= 15), so it never appears in this file. Idempotent: safe to run more than once.
 --
--- Pe un volum nou rulează automat (docker-entrypoint-initdb.d). Pe o bază existentă:
+-- Runs automatically on a new volume (docker-entrypoint-initdb.d). On an existing database:
 --   dotenv -f .env run -- docker compose exec -T -e API_DB_PASSWORD db \
 --     sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/04_api_role.sql'
 
@@ -17,7 +17,7 @@ SELECT 'CREATE ROLE api_reader'
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'api_reader')
 \gexec
 
--- Fără privilegii administrative; sesiunile sunt read-only implicit și au timeout.
+-- No administrative privileges; sessions are read-only by default and have a timeout.
 ALTER ROLE api_reader WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION
     PASSWORD :'api_password';
 ALTER ROLE api_reader SET default_transaction_read_only = on;
@@ -26,7 +26,7 @@ ALTER ROLE api_reader SET statement_timeout = '10s';
 SELECT format('GRANT CONNECT ON DATABASE %I TO api_reader', current_database())
 \gexec
 
--- Doar core: USAGE pe schemă + SELECT pe tabele. Nimic pe raw, staging sau public.
+-- Only core: USAGE on the schema + SELECT on its tables. Nothing on raw, staging or public.
 REVOKE ALL ON SCHEMA raw, staging FROM api_reader;
 REVOKE ALL ON ALL TABLES IN SCHEMA raw FROM api_reader;
 REVOKE ALL ON ALL TABLES IN SCHEMA staging FROM api_reader;
@@ -34,7 +34,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA staging FROM api_reader;
 GRANT USAGE ON SCHEMA core TO api_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA core TO api_reader;
 
--- dbt recreează tabelele core la fiecare `dbt run` (create + rename), iar un tabel nou nu
--- moștenește GRANT-urile vechi. Privilegiile implicite pentru tabelele create de rolul curent
--- (proprietarul, cel care rulează dbt) le acordă automat SELECT și pe tabelele noi.
+-- dbt recreates the core tables on every `dbt run` (create + rename), and a new table does not
+-- inherit the old GRANTs. Default privileges for tables created by the current role (the owner,
+-- which runs dbt) automatically grant SELECT on the new tables too.
 ALTER DEFAULT PRIVILEGES IN SCHEMA core GRANT SELECT ON TABLES TO api_reader;

@@ -1,6 +1,6 @@
--- Grain: review_id + order_id. În sursă, același review_id apare pe mai multe comenzi
--- (789 de id-uri), mereu cu conținut identic și fără duplicate exacte, deci nu deduplicăm:
--- fiecare rând leagă recenzia de o comandă distinctă.
+-- Grain: review_id + order_id. In the source, the same review_id appears on several orders
+-- (789 ids), always with identical content and no exact duplicates, so we do not deduplicate:
+-- each row links the review to a distinct order.
 select
     review_id,
     order_id,

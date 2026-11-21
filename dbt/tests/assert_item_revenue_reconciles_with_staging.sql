@@ -1,5 +1,5 @@
--- Dovadă că fact_order_items nu dublează și nu pierde venituri: sumele BRL și numărul de
--- rânduri trebuie să fie identice cu stg_order_items. Testul eșuează dacă întoarce rânduri.
+-- Proof that fact_order_items neither duplicates nor loses revenue: the BRL sums and the row
+-- count must equal stg_order_items. The test fails if it returns any rows.
 with fact as (
     select count(*) as n, sum(price_brl) as price_brl, sum(freight_value_brl) as freight_brl
     from {{ ref('fact_order_items') }}

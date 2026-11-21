@@ -20,7 +20,7 @@ def test_windows_at_most_90_days():
     wins = list(date_windows(date(2016, 9, 1), date(2018, 10, 31)))
     assert WINDOW_DAYS == 90
     assert all((e - s).days + 1 <= 90 for s, e in wins)
-    assert len(wins) == 9  # 791 zile -> 8 ferestre pline + una parțială
+    assert len(wins) == 9  # 791 days -> 8 full windows + one partial window
 
 
 def test_exact_multiple_of_window_size():
@@ -67,7 +67,7 @@ def test_flatten_multiple_quotes_per_day():
 
 
 def test_flatten_clips_to_requested_window():
-    # Fereastră cerută de duminică 2017-08-27; API-ul întoarce și vineri 2017-08-25.
+    # Window requested from Sunday 2017-08-27; the API also returns Friday 2017-08-25.
     payload = {
         "start_date": "2017-08-25",
         "rates": {"2017-08-25": {"EUR": 0.27}, "2017-08-28": {"EUR": 0.26}},

@@ -15,11 +15,11 @@ router = APIRouter(prefix="/orders", tags=["orders"],
 @router.get(
     "",
     response_model=OrdersPage,
-    summary="Listă de comenzi (paginare cu cursor)",
+    summary="Order list (cursor pagination)",
     description=(
-        "Comenzi ordonate stabil după `order_purchase_at` descrescător, apoi `order_id`. "
-        "Paginare keyset (fără OFFSET): pentru pagina următoare trimite `cursor=<next_cursor>` "
-        "cu aceleași filtre; `next_cursor` e `null` pe ultima pagină. Exemplu: "
+        "Orders in a stable order: `order_purchase_at` descending, then `order_id`. "
+        "Keyset pagination (no OFFSET): for the next page send `cursor=<next_cursor>` "
+        "with the same filters; `next_cursor` is `null` on the last page. Example: "
         "`/v1/orders?status=delivered&limit=50`."
     ),
 )

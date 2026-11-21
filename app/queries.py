@@ -1,5 +1,5 @@
-"""SQL către schema core. Toate valorile de la utilizator sunt parametri (%(name)s);
-singurele părți dinamice din text sunt identificatori aleși dintr-o listă fixă (sql.Identifier)."""
+"""SQL against schema core. Every user-supplied value is a parameter (%(name)s);
+the only dynamic parts of the text are identifiers picked from a fixed list (sql.Identifier)."""
 from datetime import date, datetime
 
 import psycopg
@@ -17,7 +17,7 @@ def ping(conn: psycopg.Connection) -> None:
 
 def revenue(conn, date_from: date | None, date_to: date | None,
             granularity: Granularity, currency: Currency) -> list[dict]:
-    """Serie + total (rândul cu period NULL din grouping sets). Venit = price, is_revenue = true."""
+    """Series + total (the row with period NULL from grouping sets). Revenue = price, is_revenue = true."""
     query = sql.SQL("""
         select
             period,
@@ -42,7 +42,7 @@ def revenue(conn, date_from: date | None, date_to: date | None,
 
 
 def delivery_performance(conn, state: str | None) -> dict:
-    # Statul clientului vine din dim_customers (adresa din comanda cea mai recentă).
+    # The customer's state comes from dim_customers (address from the most recent order).
     return conn.execute("""
         select
             count(*) filter (where o.order_delivered_customer_at is not null)            as orders,
@@ -79,8 +79,8 @@ def top_products(conn, category: str | None, limit: int, metric: TopMetric) -> l
 
 
 def orders_page(conn, status: str | None, after: tuple[datetime, str] | None, limit: int) -> list[dict]:
-    """Keyset: ordine stabilă (order_purchase_at desc, order_id desc); întoarce limit + 1 rânduri
-    ca apelantul să știe dacă există o pagină următoare."""
+    """Keyset: stable order (order_purchase_at desc, order_id desc); returns limit + 1 rows
+    so the caller knows whether there is a next page."""
     after_ts, after_id = after if after else (None, None)
     return conn.execute("""
         select order_id, customer_unique_id, order_status, order_purchase_at, order_approved_at,
@@ -96,13 +96,13 @@ def orders_page(conn, status: str | None, after: tuple[datetime, str] | None, li
 
 def search_reviews(conn, vector: list[float], model_name: str, min_score: int | None,
                    max_score: int | None, limit: int) -> list[dict]:
-    """Cei mai apropiați `limit` candidați după distanța cosinus (index HNSW).
-    Vectorul e trimis ca parametru text și convertit în SQL (::vector), fără concatenare."""
+    """The `limit` nearest candidates by cosine distance (HNSW index).
+    The vector is sent as a text parameter and cast in SQL (::vector), with no concatenation."""
     vector_literal = "[" + ",".join(f"{x:.8f}" for x in vector) + "]"
     with conn.transaction():
-        # Implicit HNSW întoarce cel mult ef_search (40) rânduri; cu filtre pe scor, chiar mai puține.
-        # set_config(..., true) e local tranzacției; iterative_scan (pgvector >= 0.8) continuă
-        # căutarea până găsește destui candidați care trec de filtre.
+        # By default HNSW returns at most ef_search (40) rows; with score filters, even fewer.
+        # set_config(..., true) is local to the transaction; iterative_scan (pgvector >= 0.8) keeps
+        # searching until it finds enough candidates that pass the filters.
         conn.execute("select set_config('hnsw.ef_search', %s, true), "
                      "set_config('hnsw.iterative_scan', 'relaxed_order', true)",
                      (str(max(limit, 40) * 2),))
@@ -117,5 +117,5 @@ def search_reviews(conn, vector: list[float], model_name: str, min_score: int | 
             limit %(limit)s
         """, {"v": vector_literal, "model": model_name, "min_score": min_score,
               "max_score": max_score, "limit": limit}).fetchall()
-    # relaxed_order poate inversa ușor ordinea; o refacem exact.
+    # relaxed_order can slightly change the order; restore it exactly.
     return sorted(rows, key=lambda r: (-r["similarity"], r["review_id"]))

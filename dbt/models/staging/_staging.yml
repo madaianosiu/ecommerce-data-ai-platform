@@ -2,13 +2,13 @@ version: 2
 
 models:
   - name: stg_orders
-    description: Comenzi, cu timestamp-uri tipizate (ora locală Brazilia, fără fus orar).
+    description: Orders, with typed timestamps (Brazil local time, no time zone).
     columns:
       - name: order_id
         data_tests: [unique, not_null]
 
   - name: stg_order_items
-    description: Linii de comandă; prețurile sunt în BRL.
+    description: Order lines; prices are in BRL.
     data_tests:
       - unique_combination_of_columns:
           arguments:
@@ -20,7 +20,7 @@ models:
         data_tests: [not_null]
 
   - name: stg_order_payments
-    description: Plăți per comandă; valorile sunt în BRL.
+    description: Payments per order; values are in BRL.
     data_tests:
       - unique_combination_of_columns:
           arguments:
@@ -32,14 +32,14 @@ models:
         data_tests: [not_null]
 
   - name: stg_order_reviews
-    description: Recenzii. Duplicatele pe review_id NU sunt rezolvate aici (vezi testul cu severity warn).
+    description: Reviews. Duplicates on review_id are NOT resolved here (see the test with severity warn).
     columns:
       - name: review_id
         data_tests:
           - not_null
           - unique:
               config:
-                severity: warn  # duplicate cunoscute în sursă, tratate într-o etapă ulterioară
+                severity: warn  # known duplicates in the source, handled in a later stage
 
   - name: stg_customers
     columns:
@@ -57,7 +57,7 @@ models:
         data_tests: [unique, not_null]
 
   - name: stg_geolocation
-    description: Mai multe coordonate per prefix poștal; nu are cheie primară.
+    description: Several coordinates per zip prefix; no primary key.
     columns:
       - name: zip_code_prefix
         data_tests: [not_null]
@@ -68,7 +68,7 @@ models:
         data_tests: [unique, not_null]
 
   - name: stg_fx_rates
-    description: Cursuri zilnice (zile lucrătoare ECB); 1 base_currency = rate quote_currency.
+    description: Daily rates (ECB business days); 1 base_currency = rate quote_currency.
     data_tests:
       - unique_combination_of_columns:
           arguments:

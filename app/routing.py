@@ -1,8 +1,8 @@
-"""Rutarea întrebărilor pentru /v1/ask: "sql" (cifre), "rag" (motive/opinii) sau "unsupported".
+"""Question routing for /v1/ask: "sql" (numbers), "rag" (reasons/opinions) or "unsupported".
 
-Prima opțiune e LLM-ul (prompt scurt, JSON strict, temperatură mică). Dacă LLM-ul nu răspunde
-sau întoarce ceva invalid, decide un clasificator pe cuvinte-cheie (EN/PT/RO), conservator:
-la egalitate sau fără indicii alege "rag", adică exact comportamentul dinainte de rutare.
+The first choice is the LLM (short prompt, strict JSON, low temperature). If the LLM does not answer
+or returns something invalid, a keyword classifier (EN/PT/RO) decides, conservatively: on a tie or
+with no hints it picks "rag", which is exactly the behaviour from before routing existed.
 """
 import json
 import logging
@@ -64,7 +64,7 @@ class RouteDecision:
     route: str     # "sql" | "rag" | "unsupported"
     source: str    # "llm" | "keywords"
     detail: str = ""
-    reason: str = ""   # doar pentru "unsupported": o propoziție sigură de arătat utilizatorului
+    reason: str = ""   # only for "unsupported": a sentence that is safe to show the user
 
 
 def _normalize(text: str) -> str:
@@ -91,19 +91,19 @@ def _load_json(text: str) -> dict | None:
 
 
 def parse_route(text: str) -> str | None:
-    """Acceptă doar JSON {"route": <una din ROUTES>, ...} (eventual într-un bloc ```json)."""
+    """Accept only JSON {"route": <one of ROUTES>, ...} (optionally inside a ```json block)."""
     data = _load_json(text)
     route = data.get("route") if data else None
     return route if route in ROUTES else None
 
 
 def clean_reason(reason: object) -> str:
-    """Motivul vine de la LLM și ajunge în răspuns: o singură propoziție scurtă, fără linkuri sau
-    caractere de control; altfel se folosește DEFAULT_UNSUPPORTED_REASON."""
+    """The reason comes from the LLM and ends up in the answer: a single short sentence, with no links
+    or control characters; otherwise DEFAULT_UNSUPPORTED_REASON is used."""
     if not isinstance(reason, str):
         return DEFAULT_UNSUPPORTED_REASON
-    text = " ".join(reason.split())                      # fără newline-uri / tab-uri
-    text = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0].strip()   # doar prima propoziție
+    text = " ".join(reason.split())                      # no newlines / tabs
+    text = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0].strip()   # first sentence only
     if (not text or len(text) > REASON_MAX_CHARS or re.search(r"https?:|www\.|[<>{}`]", text, re.I)
             or any(ord(c) < 32 for c in text)):
         return DEFAULT_UNSUPPORTED_REASON

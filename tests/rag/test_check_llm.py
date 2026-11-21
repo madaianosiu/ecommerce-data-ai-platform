@@ -1,4 +1,4 @@
-"""check_llm.py cu SDK-ul mock-uit: fără rețea, fără cheie reală."""
+"""check_llm.py with the SDK mocked: no network, no real key."""
 from types import SimpleNamespace
 
 import httpx
@@ -42,7 +42,7 @@ def run(exc=None, available=(), env=ENV):
     return code, "\n".join(lines), models
 
 
-# ---------------------------------------------------------------- succes
+# ---------------------------------------------------------------- success
 def test_success_reports_model_and_tokens_with_one_request():
     code, out, models = run()
     assert code == 0 and models.calls == 1
@@ -52,7 +52,7 @@ def test_success_reports_model_and_tokens_with_one_request():
     assert models.config.thinking_config.thinking_level.value == "LOW"
 
 
-# ---------------------------------------------------------------- maparea erorilor
+# ---------------------------------------------------------------- error mapping
 @pytest.mark.parametrize("exc, category", [
     (api_error(401, "UNAUTHENTICATED", "Request had invalid authentication credentials."), "auth"),
     (api_error(403, "PERMISSION_DENIED", "Method doesn't allow unregistered callers."), "auth"),
@@ -87,7 +87,7 @@ def test_suggest_flash():
     assert suggest_flash("gemini-3.8-flash", ["gemini-3.5-pro"]) is None
 
 
-# ---------------------------------------------------------------- cheia nu apare niciodată
+# ---------------------------------------------------------------- the key never appears
 @pytest.mark.parametrize("exc", [
     api_error(400, "INVALID_ARGUMENT", f"API key not valid: {FAKE_KEY}"),
     api_error(403, "PERMISSION_DENIED", f"denied for https://x/v1beta/models?key={FAKE_KEY}"),
@@ -97,7 +97,7 @@ def test_suggest_flash():
 def test_key_never_appears_in_output_even_if_the_error_contains_it(exc):
     _, out, _ = run(exc)
     assert FAKE_KEY not in out
-    for i in range(0, len(FAKE_KEY) - 8):  # nici fragmente de 8+ caractere
+    for i in range(0, len(FAKE_KEY) - 8):  # not even fragments of 8+ characters
         assert FAKE_KEY[i:i + 8] not in out
 
 
@@ -106,7 +106,7 @@ def test_redact():
     assert redact("https://h/x?key=abc123&alt=json", None) == "https://h/x?key=[REDACTED]&alt=json"
 
 
-# ---------------------------------------------------------------- configurare
+# ---------------------------------------------------------------- configuration
 @pytest.mark.parametrize("missing", ["LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY"])
 def test_missing_or_empty_variable_stops_before_any_request(missing):
     code, out, models = run(env={**ENV, missing: "  "})

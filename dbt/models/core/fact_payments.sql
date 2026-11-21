@@ -1,5 +1,5 @@
--- Grain: order_id + payment_sequential. Ținut separat de fact_order_items: o comandă are
--- N items și M plăți, iar join-ul lor direct ar multiplica sumele.
+-- Grain: order_id + payment_sequential. Kept separate from fact_order_items: an order has
+-- N items and M payments, and joining them directly would multiply the amounts.
 select
     p.order_id,
     p.payment_sequential,

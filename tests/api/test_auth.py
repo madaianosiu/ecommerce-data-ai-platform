@@ -51,12 +51,12 @@ def test_server_without_configured_key_rejects_everyone(client):
 
 
 def test_auth_is_checked_before_validation(client):
-    # Fără cheie, chiar și parametrii invalizi primesc 401 (nu dezvăluim nimic despre API).
+    # Without a key, even invalid parameters get 401 (we reveal nothing about the API).
     assert client.get("/v1/orders?limit=9999").status_code == 401
 
 
 def test_health_needs_no_key(client):
-    # Fără pool (lifespan-ul nu rulează), health răspunde 503, dar nu 401.
+    # Without a pool (the lifespan does not run), health returns 503, but not 401.
     r = client.get("/v1/health")
     assert r.status_code == 503
     assert r.json() == {"status": "degraded", "database": "unavailable"}

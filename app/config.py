@@ -1,7 +1,7 @@
-"""Configurare din variabile de mediu (aceleași nume ca în .env / .env.example).
+"""Configuration from environment variables (same names as in .env / .env.example).
 
-Aplicația NU folosește contul admin (POSTGRES_USER): se conectează ca API_DB_USER (api_reader),
-un rol read-only care vede doar schema core (vezi sql/init/04_api_role.sql).
+The app does NOT use the admin account (POSTGRES_USER): it connects as API_DB_USER (api_reader),
+a read-only role that only sees schema core (see sql/init/04_api_role.sql).
 """
 import os
 from dataclasses import dataclass, field
@@ -16,18 +16,18 @@ class Settings:
     db_port: str = "5432"
     db_name: str = ""
     db_user: str = ""
-    # Secretele au repr=False: nu apar dacă obiectul ajunge într-un log sau traceback.
+    # Secrets have repr=False: they don't show up if the object ends up in a log or traceback.
     db_password: str = field(default="", repr=False)
     api_key: str = field(default="", repr=False)
     pool_min_size: int = 1
     pool_max_size: int = 5
-    pool_timeout: float = 5.0  # secunde de așteptare pentru o conexiune din pool
-    # LLM pentru /v1/ask (vezi app/llm.py)
+    pool_timeout: float = 5.0  # seconds to wait for a pool connection
+    # LLM for /v1/ask (see app/llm.py)
     llm_provider: str = "gemini"
     llm_model: str = ""
     llm_fallback_model: str = ""
     llm_api_key: str = field(default="", repr=False)
-    # Modelul de embedding se încarcă la pornire (lifespan); 0 = la primul /v1/ask (util în teste).
+    # The embedding model loads at startup (lifespan); 0 = on the first /v1/ask (useful in tests).
     preload_embedder: bool = True
 
     def conninfo(self) -> str:
@@ -39,7 +39,7 @@ class Settings:
             password=self.db_password,
             application_name="ecommerce-data-api",
             connect_timeout="5",
-            # A doua plasă de siguranță, pe lângă setarea rolului: sesiuni read-only.
+            # A second safety net, in addition to the role setting: read-only sessions.
             options="-c default_transaction_read_only=on",
         )
 

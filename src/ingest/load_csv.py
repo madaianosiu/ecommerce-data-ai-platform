@@ -58,7 +58,7 @@ def read_header(path):
 
 def count_records(path):
     with open(path, newline="", encoding="utf-8") as f:
-        return sum(1 for _ in csv.reader(f)) - 1  # fără header
+        return sum(1 for _ in csv.reader(f)) - 1  # without the header
 
 
 def write_log(conn, run_id, table, filename, expected, loaded, status, error, started):

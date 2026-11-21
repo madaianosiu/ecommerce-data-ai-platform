@@ -1,11 +1,11 @@
-"""Verifică configurarea cheii LLM (Gemini) cu O SINGURĂ cerere minimă.
+"""Check the LLM key setup (Gemini) with ONE minimal request.
 
-Citește LLM_PROVIDER, LLM_MODEL, LLM_API_KEY din .env și afișează: succes/eșec,
-modelul folosit și consumul de tokeni. Cheia nu este afișată niciodată (nici parțial):
-tot ce se tipărește trece prin redact().
+Reads LLM_PROVIDER, LLM_MODEL, LLM_API_KEY from .env and prints: success/failure,
+the model used and the token usage. The key is never printed (not even partly):
+everything that is printed goes through redact().
 
-Rulare: python src/rag/check_llm.py
-Coduri de ieșire: 0 succes, 1 eroare la apel, 2 configurare lipsă/invalidă.
+Run: python src/rag/check_llm.py
+Exit codes: 0 success, 1 call error, 2 missing/invalid configuration.
 """
 import difflib
 import re
@@ -16,9 +16,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROMPT = "Reply with the single word OK"
-# google-genai: HttpOptions.timeout e în milisecunde și e trimis și serverului (X-Server-Timeout),
-# deci Gemini oprește singur cererea la acest termen (HTTP 504 DEADLINE_EXCEEDED). Modelele Flash
-# care „gândesc” pot depăși 20 s la prima cerere, de aceea 60 s.
+# google-genai: HttpOptions.timeout is in milliseconds and is also sent to the server (X-Server-Timeout),
+# so Gemini itself stops the request at that deadline (HTTP 504 DEADLINE_EXCEEDED). Flash models
+# that "think" can exceed 20 s on the first request, hence 60 s.
 TIMEOUT_MS = 60_000
 REQUIRED = ("LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY")
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -26,16 +26,16 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 _KEY_PARAM = re.compile(r"(key=)[^&\s\"']+", re.IGNORECASE)
 
 
-# ---------------------------------------------------------------- siguranță
+# ---------------------------------------------------------------- safety
 def redact(text: object, secret: str | None) -> str:
-    """Scoate cheia din orice text (și orice parametru ?key=... dintr-un URL)."""
+    """Remove the key from any text (and any ?key=... parameter in a URL)."""
     out = str(text)
     if secret:
         out = out.replace(secret, "[REDACTED]")
     return _KEY_PARAM.sub(r"\1[REDACTED]", out)
 
 
-# ---------------------------------------------------------------- erori -> mesaje simple
+# ---------------------------------------------------------------- errors -> plain messages
 def _network_error_types() -> tuple[type[BaseException], ...]:
     types_: list[type[BaseException]] = [ConnectionError, TimeoutError]
     for mod in ("httpx", "httpx2"):  # SDK-ul poate folosi oricare dintre ele
@@ -47,8 +47,8 @@ def _network_error_types() -> tuple[type[BaseException], ...]:
 
 
 def classify_error(exc: BaseException) -> tuple[str, str]:
-    """(categorie, mesaj simplu) pentru o excepție de la SDK. Pentru erorile 5xx și 400 generice se
-    adaugă mesajul serverului (scurtat); la afișare totul trece prin redact()."""
+    """(category, plain message) for an SDK exception. For 5xx and generic 400 errors the server's
+    message is appended (shortened); everything printed goes through redact()."""
     from google.genai import errors
 
     if isinstance(exc, errors.APIError):
@@ -74,7 +74,7 @@ def classify_error(exc: BaseException) -> tuple[str, str]:
     return "unexpected", f"Unexpected error: {type(exc).__name__}."
 
 
-# ---------------------------------------------------------------- listă modele (la 404)
+# ---------------------------------------------------------------- model list (on 404)
 def suggest_flash(model: str, available: list[str]) -> str | None:
     flash = [m for m in available if "flash" in m]
     if not flash:
@@ -93,7 +93,7 @@ def list_gemini_models(client) -> list[str]:
     return sorted(set(names))
 
 
-# ---------------------------------------------------------------- verificarea propriu-zisă
+# ---------------------------------------------------------------- the check itself
 def read_config(env: dict[str, str | None]) -> tuple[dict[str, str], list[str]]:
     values = {k: (env.get(k) or "").strip() for k in REQUIRED}
     problems = [f"{k} is missing or empty" for k, v in values.items() if not v]
@@ -110,14 +110,14 @@ def default_client_factory(api_key: str):
         api_key=api_key,
         http_options=types.HttpOptions(
             timeout=TIMEOUT_MS,
-            retry_options=types.HttpRetryOptions(attempts=1),  # o singură cerere, fără retry-uri
+            retry_options=types.HttpRetryOptions(attempts=1),  # a single request, no retries
         ),
     )
 
 
 def _check_config():
-    """Gândire redusă (LOW; MINIMAL nu e acceptat de gemini-3.8-flash): verificarea are nevoie de un singur cuvânt, nu de raționament.
-    Cu gândirea implicită, cererea a depășit 60 s (504 DEADLINE_EXCEEDED)."""
+    """Reduced thinking (LOW; gemini-3.8-flash rejects MINIMAL): the check needs a single word, not reasoning.
+    With default thinking, the request exceeded 60 s (504 DEADLINE_EXCEEDED)."""
     from google.genai import types
 
     return types.GenerateContentConfig(
@@ -144,7 +144,7 @@ def run_check(env: dict[str, str | None], client_factory: Callable = default_cli
     try:
         client = client_factory(key)
         response = client.models.generate_content(model=model, contents=PROMPT, config=_check_config())
-    except Exception as exc:  # noqa: BLE001 - mapăm orice eroare la un mesaj simplu
+    except Exception as exc:  # noqa: BLE001 - map any error to a plain message
         category, message = classify_error(exc)
         emit(f"FAILURE ({category}): {message}")
         if category == "model_not_found":

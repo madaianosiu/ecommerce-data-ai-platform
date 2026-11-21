@@ -1,4 +1,4 @@
-# Fără secrete: toate valorile vin din variabilele de mediu din .env (aceleași ca load_csv.py).
+# No secrets: every value comes from the environment variables in .env (the same ones load_csv.py uses).
 ecommerce_platform:
   target: dev
   outputs:

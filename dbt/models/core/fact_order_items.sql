@@ -1,5 +1,5 @@
--- Grain: order_id + order_item_id. EUR = BRL * cursul as-of din ziua cumpărării comenzii.
--- Venit = sum(price) unde is_revenue (comanda nu e canceled/unavailable). Nu se șterg rânduri.
+-- Grain: order_id + order_item_id. EUR = BRL * the as-of rate on the order's purchase day.
+-- Revenue = sum(price) where is_revenue (order not canceled/unavailable). No rows are deleted.
 select
     i.order_id,
     i.order_item_id,

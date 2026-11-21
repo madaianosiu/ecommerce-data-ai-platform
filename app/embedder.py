@@ -1,7 +1,7 @@
-"""Embedding pentru întrebări, cu același model ca src/rag/embed_reviews.py.
+"""Question embeddings, with the same model as src/rag/embed_reviews.py.
 
-Constantele sunt dublate aici (în loc de import) pentru că embed_reviews.py încarcă .env și
-modulul de ingestie la import; un test verifică faptul că valorile rămân identice.
+The constants are duplicated here (instead of imported) because embed_reviews.py loads .env and
+the ingestion module on import; a test checks that the values stay identical.
 """
 import threading
 from pathlib import Path
@@ -26,7 +26,7 @@ class E5Embedder:
     def __init__(self):
         from sentence_transformers import SentenceTransformer
 
-        # local_files_only: modelul e deja descărcat de embed_reviews.py; API-ul nu descarcă nimic.
+        # local_files_only: embed_reviews.py has already downloaded the model; the API downloads nothing.
         self._model = SentenceTransformer(MODEL_NAME, revision=MODEL_REVISION,
                                           cache_folder=str(CACHE_DIR), local_files_only=True)
         self._lock = threading.Lock()

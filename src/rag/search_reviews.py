@@ -1,6 +1,6 @@
-"""Căutare semantică în core.review_embeddings (similaritate cosinus, index HNSW).
+"""Semantic search in core.review_embeddings (cosine similarity, HNSW index).
 
-Rulare: python src/rag/search_reviews.py "atraso na entrega" [-k 5]
+Run: python src/rag/search_reviews.py "atraso na entrega" [-k 5]   ("delivery delay"; queries can be in any language)
 """
 import argparse
 import sys
@@ -13,7 +13,7 @@ from embed_reviews import MODEL_NAME, QUERY_PREFIX, connect, embed, load_model  
 
 
 def search(conn, model, query: str, k: int = 5) -> list[tuple]:
-    """(review_id, review_score, similarity, comment_text), cele mai apropiate primele."""
+    """(review_id, review_score, similarity, comment_text), closest first."""
     vector = embed(model, [query], QUERY_PREFIX)[0]
     return conn.execute(
         """select review_id, review_score, round((1 - (embedding <=> %(v)s))::numeric, 4) as similarity,

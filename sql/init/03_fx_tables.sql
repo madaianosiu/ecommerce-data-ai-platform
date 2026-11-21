@@ -1,6 +1,6 @@
--- Cursuri valutare din API-ul Frankfurter (Etapa 4b).
--- fx_rates_raw: răspunsul JSON brut, câte un rând per fereastră de cerere.
--- fx_rates: cursurile aplatizate, o valoare per (zi, bază, monedă cotată).
+-- Exchange rates from the Frankfurter API (Stage 4b).
+-- fx_rates_raw: the raw JSON response, one row per request window.
+-- fx_rates: the flattened rates, one value per (day, base, quote currency).
 
 CREATE TABLE IF NOT EXISTS raw.fx_rates_raw (
     id bigserial PRIMARY KEY,

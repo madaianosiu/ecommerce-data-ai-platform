@@ -1,4 +1,4 @@
-"""Cursor opac pentru paginare keyset pe (order_purchase_at, order_id)."""
+"""Opaque cursor for keyset pagination on (order_purchase_at, order_id)."""
 import base64
 import binascii
 import json

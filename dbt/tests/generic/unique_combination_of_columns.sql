@@ -1,4 +1,4 @@
-{#- Unicitate pe cheie compusă (fără dependență de dbt_utils). -#}
+{#- Uniqueness on a composite key (no dependency on dbt_utils). -#}
 {% test unique_combination_of_columns(model, combination_of_columns) %}
 select {{ combination_of_columns | join(', ') }}, count(*) as n_records
 from {{ model }}

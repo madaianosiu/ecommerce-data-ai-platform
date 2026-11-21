@@ -1,6 +1,6 @@
--- Categorie explicită, niciodată NULL:
---   fără categorie în sursă  -> 'unknown'
---   categorie fără traducere -> numele portughez ca fallback
+-- Explicit category, never NULL:
+--   no category in the source       -> 'unknown'
+--   category without a translation  -> the Portuguese name as fallback
 select
     p.product_id,
     coalesce(p.product_category_name, 'unknown')            as product_category_name_pt,

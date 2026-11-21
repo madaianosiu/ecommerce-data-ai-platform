@@ -37,9 +37,9 @@ log = logging.getLogger("app.ask")
 
 router = APIRouter(tags=["ask"], responses={
     **AUTH_ERRORS, **DB_ERRORS,
-    422: {"model": ErrorResponse, "description": "Cerere invalidă sau întrebare care nu a putut fi transformată "
-                                                 "într-o interogare SQL sigură."},
-    502: {"model": ErrorResponse, "description": "Modelul de limbaj a refuzat sau a eșuat cererea."},
+    422: {"model": ErrorResponse, "description": "Invalid request, or a question that could not be turned "
+                                                 "into a safe SQL query."},
+    502: {"model": ErrorResponse, "description": "The language model refused or failed the request."},
 })
 
 _embedder_lock = threading.Lock()
@@ -48,9 +48,9 @@ _sql_context_lock = threading.Lock()
 LLM_RETRY_HINT = "The language model is temporarily unavailable. Please retry in about a minute."
 
 
-# ---------------------------------------------------------------- dependențe (înlocuite în teste)
+# ---------------------------------------------------------------- dependencies (overridden in tests)
 def get_embedder(request: Request) -> Embedder:
-    """Modelul e încărcat o dată la pornire (lifespan); dacă preload e oprit, la primul apel."""
+    """The model is loaded once at startup (lifespan); if preload is off, on the first call."""
     embedder = getattr(request.app.state, "embedder", None)
     if embedder is not None:
         return embedder
@@ -67,7 +67,7 @@ def get_embedder(request: Request) -> Embedder:
 
 
 def get_embedder_provider(request: Request) -> Callable[[], Embedder]:
-    """Leneș: ruta sql nu are nevoie de modelul de embedding."""
+    """Lazy: the sql route does not need the embedding model."""
     return lambda: get_embedder(request)
 
 
@@ -85,7 +85,7 @@ def get_llm(request: Request) -> LLMClient:
 
 
 def get_connection_factory(request: Request) -> Callable[[], AbstractContextManager]:
-    """Conexiunea se ia din pool doar pentru căutare/interogare, nu pe toată durata apelului LLM."""
+    """A pool connection is taken only for the search/query, not for the whole LLM call."""
     return lambda: connection(request)
 
 
@@ -94,7 +94,7 @@ def get_classifier(llm: LLMClient = Depends(get_llm)) -> Callable[[str], RouteDe
 
 
 def get_sql_context_provider(request: Request) -> Callable[[], SqlContext]:
-    """Descrierea schemei core (din dbt + information_schema), construită o dată, la prima întrebare sql."""
+    """The core schema description (from dbt + information_schema), built once, on the first sql question."""
     def provider() -> SqlContext:
         ctx = getattr(request.app.state, "sql_context", None)
         if ctx is None:
@@ -112,17 +112,17 @@ def get_sql_context_provider(request: Request) -> Callable[[], SqlContext]:
 @router.post(
     "/ask",
     response_model=AskResult,
-    summary="Întrebare în limbaj natural (rutare SQL / RAG)",
+    summary="Natural-language question (SQL / RAG routing)",
     description=(
-        "Un router decide ruta întrebării (LLM cu JSON strict; cuvinte-cheie dacă LLM-ul nu răspunde):\n\n"
-        "* **`sql`** (cifre, totaluri, clasamente, rate): LLM-ul scrie un singur SELECT peste schema `core`, "
-        "validat cu sqlglot (doar SELECT, allowlist de tabele, funcții periculoase blocate), executat ca "
-        "`api_reader` într-o tranzacție read-only cu timeout de 10 s și maxim 200 de rânduri; răspunsul "
-        "citează doar cifrele din rânduri și include SQL-ul executat.\n"
-        "* **`rag`** (motive, opinii): căutare semantică în recenziile scrise și răspuns cu citări [n] "
-        "care corespund listei `sources`. Recenziile cu text sunt un subset (≈41%) înclinat spre scoruri mici.\n"
-        "* **`unsupported`**: întrebarea nu ține de aceste date.\n\n"
-        "Răspunsul vine în limba întrebării."
+        "A router picks the route for each question (LLM with strict JSON; keywords if the LLM does not answer):\n\n"
+        "* **`sql`** (numbers, totals, rankings, rates): the LLM writes a single SELECT over schema `core`, "
+        "validated with sqlglot (SELECT only, table allowlist, dangerous functions blocked), run as "
+        "`api_reader` in a read-only transaction with a 10 s timeout and at most 200 rows; the answer "
+        "cites only numbers from the rows and includes the executed SQL.\n"
+        "* **`rag`** (reasons, opinions): semantic search over written reviews and an answer with [n] "
+        "citations matching the `sources` list. Reviews with text are a subset (≈41%) that skews toward low scores.\n"
+        "* **`unsupported`**: the question is not about this data; the answer says why in one sentence.\n\n"
+        "The answer is in the language of the question."
     ),
 )
 def ask(
@@ -137,7 +137,7 @@ def ask(
     log.info("ask route=%s (by %s)", decision.route, decision.source)
 
     if decision.route == "unsupported":
-        # O propoziție cu motivul (de la clasificator, curățată de clean_reason; altfel cea implicită).
+        # One sentence with the reason (from the classifier, cleaned by clean_reason; otherwise the default).
         reason = decision.reason or DEFAULT_UNSUPPORTED_REASON
         return UnsupportedAskResponse(answer=f"{UNSUPPORTED_ANSWER} {reason}", notes=[_route_note(decision)])
     if decision.route == "sql":
@@ -145,10 +145,10 @@ def ask(
     return _answer_rag(body, embedder_provider(), llm, connection_factory)
 
 
-# ---------------------------------------------------------------- ruta sql
+# ---------------------------------------------------------------- sql route
 def _answer_sql(body: AskRequest, decision: RouteDecision, llm: LLMClient,
                 connection_factory, sql_context_provider) -> SqlAskResponse:
-    ctx = sql_context_provider()   # DatabaseUnavailable -> 503 prin handler-ul global
+    ctx = sql_context_provider()   # DatabaseUnavailable -> 503 via the global handler
     try:
         outcome = text_to_sql.answer_with_sql(body.question, llm, ctx, connection_factory,
                                               expected_user=get_settings().db_user)
@@ -192,7 +192,7 @@ def _llm_http_error(exc: LLMUnavailable) -> HTTPException:
     return HTTPException(status.HTTP_502_BAD_GATEWAY, "The language model request failed.")
 
 
-# ---------------------------------------------------------------- ruta rag (neschimbată)
+# ---------------------------------------------------------------- rag route (unchanged)
 def _answer_rag(body: AskRequest, embedder: Embedder, llm: LLMClient, connection_factory) -> AskResponse:
     score_filter = _score_filter_label(body.min_score, body.max_score)
 
@@ -202,13 +202,13 @@ def _answer_rag(body: AskRequest, embedder: Embedder, llm: LLMClient, connection
         log.exception("Embedding failed")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Embedding model unavailable") from None
 
-    with connection_factory() as conn:  # DatabaseUnavailable -> 503 prin handler-ul global
+    with connection_factory() as conn:  # DatabaseUnavailable -> 503 via the global handler
         rows = queries.search_reviews(conn, vector, embedder.model_name, body.min_score,
                                       body.max_score, candidate_limit(body.top_k))
 
     candidates = [Candidate(r["review_id"], r["review_score"], r["text"], r["similarity"]) for r in rows]
     sources = dedupe_candidates(candidates, body.top_k)
-    # n = aceeași numerotare ca <review id="n"> din prompt (build_user_prompt), deci ca [n] din răspuns.
+    # n = the same numbering as <review id="n"> in the prompt (build_user_prompt), so as [n] in the answer.
     source_models = [AskSource(n=i, review_id=s.review_id, review_score=s.review_score, text=s.text,
                                similarity=round(s.similarity, 4)) for i, s in enumerate(sources, start=1)]
 

@@ -13,12 +13,12 @@ router = APIRouter(prefix="/products", tags=["products"], responses={**AUTH_ERRO
 @router.get(
     "/top",
     response_model=TopProductsResponse,
-    summary="Top produse",
+    summary="Top products",
     description=(
-        "Cele mai vândute produse după venit (`metric=revenue`, sum `price_brl`) sau cantitate "
-        "(`metric=quantity`, număr de linii de comandă), doar din comenzile care intră în venit. "
-        "La egalitate, ordinea e după `product_id`. `category` e categoria din `dim_products` "
-        "(tradusă; `unknown` pentru produsele fără categorie). Exemplu: "
+        "Best-selling products by revenue (`metric=revenue`, sum of `price_brl`) or quantity "
+        "(`metric=quantity`, number of order lines), only from orders that count as revenue. "
+        "Ties are ordered by `product_id`. `category` is the category from `dim_products` "
+        "(translated; `unknown` for products without a category). Example: "
         "`/v1/products/top?category=health_beauty&limit=5&metric=quantity`."
     ),
 )

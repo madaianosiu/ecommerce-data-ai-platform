@@ -1,17 +1,17 @@
 version: 2
 
 models:
-  # ---------- dimensiuni ----------
+  # ---------- dimensions ----------
   - name: dim_date
-    description: Calendar continuu, de la cea mai veche la cea mai nouă dată din comenzi.
+    description: Continuous calendar, from the earliest to the latest date found in orders.
     columns:
       - name: date_day
         data_tests: [unique, not_null]
 
   - name: dim_fx_daily
     description: >
-      Curs BRL->EUR pentru fiecare zi din dim_date, as-of: ultimul curs ECB publicat până în acea zi.
-      rate_brl_eur = câți EUR valorează 1 BRL.
+      BRL->EUR rate for every day in dim_date, as-of: the latest ECB rate published on or before that day.
+      rate_brl_eur = how many EUR 1 BRL is worth.
     columns:
       - name: date
         data_tests:
@@ -24,23 +24,23 @@ models:
       - name: rate_brl_eur
         data_tests: [not_null]
       - name: rate_source_date
-        description: Data cursului efectiv folosit (<= date).
+        description: Date of the rate actually used (<= date).
         data_tests: [not_null]
       - name: is_filled
-        description: true când nu există curs publicat în ziua respectivă (weekend/sărbătoare).
+        description: true when no rate was published on that day (weekend/holiday).
         data_tests: [not_null]
 
   - name: dim_customers
     description: >
-      Un rând per client real (customer_unique_id). customer_id din sursă e per comandă;
-      maparea customer_id -> customer_unique_id e păstrată în fact_orders.
-      Adresa provine din comanda cea mai recentă.
+      One row per real customer (customer_unique_id). customer_id in the source is per order;
+      the customer_id -> customer_unique_id mapping is kept in fact_orders.
+      The address comes from the customer's most recent order.
     columns:
       - name: customer_unique_id
         data_tests: [unique, not_null]
 
   - name: dim_products
-    description: Produse cu categorie tradusă; 'unknown' fără categorie, fallback pe numele portughez fără traducere.
+    description: Products with translated category; 'unknown' when there is no category, Portuguese name as fallback when there is no translation.
     columns:
       - name: product_id
         data_tests: [unique, not_null]
@@ -54,9 +54,9 @@ models:
       - name: seller_id
         data_tests: [unique, not_null]
 
-  # ---------- fapte ----------
+  # ---------- facts ----------
   - name: fact_orders
-    description: Grain = o comandă. Status, timestamp-uri și indicatori de livrare; fără sume.
+    description: Grain = one order. Status, timestamps and delivery indicators; no amounts.
     columns:
       - name: order_id
         data_tests: [unique, not_null]
@@ -83,22 +83,22 @@ models:
                 to: ref('dim_date')
                 field: date_day
       - name: delivery_days
-        description: Zile calendaristice de la cumpărare la livrarea la client (NULL dacă nu e livrată).
+        description: Calendar days from purchase to delivery to the customer (NULL if not delivered).
       - name: is_late
-        description: Livrată după data estimată (NULL dacă nu există dată de livrare).
+        description: Delivered after the estimated date (NULL if there is no delivery date).
       - name: has_delivery_date_issue
-        description: Status 'delivered' dar fără order_delivered_customer_at.
+        description: Status 'delivered' but no order_delivered_customer_at.
         data_tests: [not_null]
 
   - name: fact_order_items
     description: >
-      Grain = order_id + order_item_id. Prețuri în BRL și EUR (curs din ziua cumpărării).
+      Grain = order_id + order_item_id. Prices in BRL and EUR (purchase-day rate).
 
-      **Definiția venitului:** venit = sum(price_brl) (sau price_eur) din fact_order_items pentru
-      comenzile al căror order_status nu este 'canceled' sau 'unavailable', adică `where is_revenue`.
-      Freight-ul nu intră în venit. Rândurile comenzilor excluse rămân în tabel (nu se șterge nimic),
-      doar sunt marcate is_revenue = false. Plățile nu sunt sursa venitului: comenzile plătite fără
-      items sunt explicate în recon_payments_without_items.
+      **Revenue definition:** revenue = sum(price_brl) (or price_eur) from fact_order_items for
+      orders whose order_status is not 'canceled' or 'unavailable', i.e. `where is_revenue`.
+      Freight is not revenue. Rows of excluded orders stay in the table (nothing is deleted);
+      they are only marked is_revenue = false. Payments are not the revenue source: orders paid
+      without items are explained in recon_payments_without_items.
     data_tests:
       - unique_combination_of_columns:
           arguments:
@@ -141,14 +141,14 @@ models:
       - name: order_status
         data_tests: [not_null]
       - name: is_revenue
-        description: true dacă linia intră în venit (order_status nu e canceled sau unavailable).
+        description: true if the line counts as revenue (order_status is not canceled or unavailable).
         data_tests: [not_null]
 
   - name: recon_payments_without_items
     description: >
-      Reconciliere plăți vs items: o linie per comandă care are plăți în fact_payments dar nicio
-      linie în fact_order_items, cu order_status și suma plătită. Explică cea mai mare parte din
-      diferența dintre totalul plăților și items + freight. Nu modifică și nu filtrează faptele.
+      Payments vs items reconciliation: one row per order that has payments in fact_payments but no
+      row in fact_order_items, with order_status and the amount paid. Explains most of the
+      difference between total payments and items + freight. Does not modify or filter the facts.
     columns:
       - name: order_id
         data_tests:
@@ -165,8 +165,8 @@ models:
 
   - name: fact_payments
     description: >
-      Grain = order_id + payment_sequential. Separat de fact_order_items ca să nu se dubleze
-      veniturile la join. Valori în BRL și EUR (curs din ziua cumpărării).
+      Grain = order_id + payment_sequential. Kept separate from fact_order_items so that a join
+      cannot duplicate revenue. Values in BRL and EUR (purchase-day rate).
     data_tests:
       - unique_combination_of_columns:
           arguments:
@@ -188,8 +188,8 @@ models:
 
   - name: fact_reviews
     description: >
-      Grain = review_id + order_id. Același review_id apare pe mai multe comenzi în sursă
-      (conținut identic, fără duplicate exacte), deci nu se deduplică.
+      Grain = review_id + order_id. The same review_id appears on several orders in the source
+      (identical content, no exact duplicates), so it is not deduplicated.
     data_tests:
       - unique_combination_of_columns:
           arguments:

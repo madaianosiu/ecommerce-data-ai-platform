@@ -1,12 +1,12 @@
-"""Embedding-uri pentru textul recenziilor (core.fact_reviews) în core.review_embeddings.
+"""Embeddings of the review texts (core.fact_reviews) into core.review_embeddings.
 
-Model local multilingv (sentence-transformers), un embedding per review_id cu text.
-Repetabil: se calculează doar recenziile care nu au încă embedding pentru acest model
-(cheia review_id + model_name); fiecare batch se comite separat, deci o rulare
-întreruptă continuă de unde a rămas. Fiecare rulare se loghează în raw.etl_log.
+Local multilingual model (sentence-transformers), one embedding per review_id with text.
+Repeatable: only reviews that have no embedding yet for this model are computed
+(key review_id + model_name); each batch is committed separately, so an interrupted run
+resumes where it stopped. Every run is logged in raw.etl_log.
 
-Tabelul e definit în sql/init/05_pgvector.sql.
-Rulare: python src/rag/embed_reviews.py [--batch-size 64] [--limit N]
+The table is defined in sql/init/05_pgvector.sql.
+Run: python src/rag/embed_reviews.py [--batch-size 64] [--limit N]
 """
 import argparse
 import re
@@ -20,17 +20,17 @@ from pathlib import Path
 
 from pgvector.psycopg import register_vector
 
-# Aceeași conexiune (.env + POSTGRES_*) și același format de log ca scripturile de ingestie.
+# Same connection (.env + POSTGRES_*) and same log format as the ingestion scripts.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ingest"))
 from load_csv import LOG_DDL, connect, write_log  # noqa: E402
 
 MODEL_NAME = "intfloat/multilingual-e5-small"
-MODEL_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"  # commit fixat pe Hugging Face
+MODEL_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"  # pinned Hugging Face commit
 EMBEDDING_DIM = 384
-# Modelele e5 au fost antrenate cu prefixe: "passage: " pentru documente, "query: " pentru căutări.
+# The e5 models were trained with prefixes: "passage: " for documents, "query: " for searches.
 PASSAGE_PREFIX = "passage: "
 QUERY_PREFIX = "query: "
-CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache" / "models"  # ignorat de git
+CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache" / "models"  # ignored by git
 
 TABLE = "review_embeddings"
 SOURCE = "core.fact_reviews"
@@ -46,9 +46,9 @@ class Review:
     score: int
 
 
-# ---------------------------------------------------------------- funcții pure (testate)
+# ---------------------------------------------------------------- pure functions (tested)
 def clean_text(text: str | None) -> str | None:
-    """Spațiile multiple / \\r\\n devin un singur spațiu; textul gol devine None."""
+    """Multiple spaces / \\r\\n become a single space; empty text becomes None."""
     if text is None:
         return None
     cleaned = _WHITESPACE.sub(" ", text).strip()
@@ -56,8 +56,8 @@ def clean_text(text: str | None) -> str | None:
 
 
 def dedupe_reviews(rows: Iterable[tuple[str, str | None, int]]) -> list[Review]:
-    """Un Review per review_id (primul întâlnit), doar cele cu text nevid, sortate după id.
-    În sursă, același review_id apare pe mai multe comenzi cu același text și scor."""
+    """One Review per review_id (the first one seen), only those with non-empty text, sorted by id.
+    In the source, the same review_id appears on several orders with the same text and score."""
     seen: dict[str, Review] = {}
     for review_id, text, score in rows:
         cleaned = clean_text(text)
@@ -68,7 +68,7 @@ def dedupe_reviews(rows: Iterable[tuple[str, str | None, int]]) -> list[Review]:
 
 
 def select_new(reviews: Iterable[Review], existing_ids: set[str]) -> list[Review]:
-    """Recenziile care nu au încă embedding pentru modelul curent."""
+    """Reviews that have no embedding yet for the current model."""
     return [r for r in reviews if r.review_id not in existing_ids]
 
 
@@ -81,19 +81,19 @@ def batched(items: list, size: int) -> Iterator[list]:
 
 # ---------------------------------------------------------------- model
 def load_model():
-    # Import întârziat: testele funcțiilor pure nu au nevoie de torch / sentence-transformers.
+    # Deferred import: the pure-function tests don't need torch / sentence-transformers.
     from sentence_transformers import SentenceTransformer
 
     return SentenceTransformer(MODEL_NAME, revision=MODEL_REVISION, cache_folder=str(CACHE_DIR))
 
 
 def embed(model, texts: list[str], prefix: str):
-    """Vectori normalizați (lungime 1), deci distanța cosinus e coerentă între rulări."""
+    """Normalized vectors (length 1), so cosine distance is consistent across runs."""
     return model.encode([prefix + t for t in texts], normalize_embeddings=True,
                         convert_to_numpy=True, show_progress_bar=False)
 
 
-# ---------------------------------------------------------------- baza de date
+# ---------------------------------------------------------------- database
 def fetch_reviews(conn) -> list[Review]:
     with conn.transaction():
         rows = conn.execute(f"""
@@ -127,7 +127,7 @@ def insert_batch(conn, batch: list[Review], vectors, model_name: str) -> int:
 
 
 def run(conn, batch_size: int, limit: int | None) -> tuple[int, int]:
-    """Întoarce (expected, loaded) pentru etl_log."""
+    """Return (expected, loaded) for etl_log."""
     from tqdm import tqdm
 
     reviews = fetch_reviews(conn)
@@ -171,7 +171,7 @@ def main():
         try:
             expected, loaded = run(conn, args.batch_size, args.limit)
             status, error = "success", None
-        except Exception as exc:  # fiecare conn.transaction() a făcut deja rollback
+        except Exception as exc:  # every conn.transaction() has already rolled back
             status, error = "failed", str(exc)
 
         write_log(conn, run_id, TABLE, f"{SOURCE} ({MODEL_NAME})", expected, loaded, status, error, started)

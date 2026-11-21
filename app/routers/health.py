@@ -11,9 +11,9 @@ router = APIRouter(tags=["health"])
 @router.get(
     "/health",
     response_model=HealthResponse,
-    summary="Starea serviciului",
-    description="Fără autentificare. Verifică și conexiunea la baza de date (select 1). "
-                "Întoarce 503 dacă baza nu răspunde.",
+    summary="Service status",
+    description="No authentication. Also checks the database connection (select 1). "
+                "Returns 503 if the database does not respond.",
     responses={503: {"model": HealthResponse, "description": DB_ERRORS[503]["description"],
                      "content": {"application/json": {"example": {"status": "degraded",
                                                                   "database": "unavailable"}}}}},

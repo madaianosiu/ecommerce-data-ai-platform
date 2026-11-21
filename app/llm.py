@@ -1,9 +1,9 @@
-"""Interfață LLM pentru /v1/ask: generate(system_prompt, user_prompt) -> LLMResult.
+"""LLM interface for /v1/ask: generate(system_prompt, user_prompt) -> LLMResult.
 
-Implementare: Gemini prin google-genai, cu aceeași mapare a erorilor și aceeași redactare a
-cheii ca src/rag/check_llm.py. Politică: retry pe 429/503/504 (max 2, backoff exponențial),
-timeout de 30 s pe cerere, apoi o singură încercare cu modelul de rezervă. Cheia nu e
-niciodată logată: orice mesaj de eroare trece prin redact().
+Implementation: Gemini via google-genai, with the same error mapping and the same key redaction
+as src/rag/check_llm.py. Policy: retry on 429/503/504 (max 2, exponential backoff), a 30 s
+timeout per request, then a single attempt with the fallback model. The key is never logged:
+every error message goes through redact().
 """
 import logging
 import random
@@ -17,11 +17,11 @@ from src.rag.check_llm import classify_error, redact
 
 log = logging.getLogger("app.llm")
 
-TIMEOUT_MS = 30_000          # client-side; google-genai îl trimite și serverului (X-Server-Timeout)
-MAX_RETRIES = 2              # retry-uri după prima încercare, doar pentru erorile tranzitorii
+TIMEOUT_MS = 30_000          # client-side; google-genai also sends it to the server (X-Server-Timeout)
+MAX_RETRIES = 2              # retries after the first attempt, for transient errors only
 BACKOFF_BASE_S = 1.0         # 1 s, 2 s (+ jitter mic)
-RETRYABLE = {"rate_limit", "server", "timeout"}     # 429, 503 (și alte 5xx), 504
-NO_FALLBACK = {"auth"}       # cheia greșită nu se repară schimbând modelul
+RETRYABLE = {"rate_limit", "server", "timeout"}     # 429, 503 (and other 5xx), 504
+NO_FALLBACK = {"auth"}       # a wrong key isn't fixed by switching models
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class LLMResult:
 
 
 class LLMUnavailable(Exception):
-    """LLM-ul nu a răspuns. `category` vine din classify_error (fără detalii interne)."""
+    """The LLM did not answer. `category` comes from classify_error (no internal details)."""
 
     def __init__(self, category: str, transient: bool):
         super().__init__(category)
@@ -58,7 +58,7 @@ class GeminiLLM:
     max_retries: int = MAX_RETRIES
     backoff_base_s: float = BACKOFF_BASE_S
     sleep: Callable[[float], None] = time.sleep
-    client: object | None = field(default=None, repr=False)  # injectabil în teste
+    client: object | None = field(default=None, repr=False)  # injectable in tests
 
     def __post_init__(self):
         if self.client is None:
@@ -69,15 +69,15 @@ class GeminiLLM:
                 api_key=self.api_key,
                 http_options=types.HttpOptions(
                     timeout=TIMEOUT_MS,
-                    retry_options=types.HttpRetryOptions(attempts=1),  # retry-urile le facem noi
+                    retry_options=types.HttpRetryOptions(attempts=1),  # we do the retries ourselves
                 ),
             )
 
-    # ------------------------------------------------------------------ API public
+    # ------------------------------------------------------------------ public API
     def generate(self, system_prompt: str, user_prompt: str, *, temperature: float | None = None,
                  json_output: bool = False) -> LLMResult:
-        """temperature=None păstrează valoarea implicită a modelului (folosit de RAG);
-        json_output cere un răspuns application/json (clasificarea întrebărilor)."""
+        """temperature=None keeps the model default (used by RAG);
+        json_output asks for an application/json response (question classification)."""
         options = {"temperature": temperature, "json_output": json_output}
         try:
             return self._generate_with_retries(self.model, system_prompt, user_prompt,
@@ -91,7 +91,7 @@ class GeminiLLM:
             return self._generate_with_retries(self.fallback_model, system_prompt, user_prompt,
                                                retries=0, used_fallback=True, **options)
 
-    # ------------------------------------------------------------------ intern
+    # ------------------------------------------------------------------ internal
     def _generate_with_retries(self, model: str, system_prompt: str, user_prompt: str,
                                retries: int, used_fallback: bool, temperature: float | None = None,
                                json_output: bool = False) -> LLMResult:
@@ -101,7 +101,7 @@ class GeminiLLM:
             try:
                 response = self._call(model, system_prompt, user_prompt, temperature, json_output)
                 return self._to_result(response, model, used_fallback, attempt)
-            except Exception as exc:  # noqa: BLE001 - mapăm orice eroare la o categorie
+            except Exception as exc:  # noqa: BLE001 - map any error to a category
                 category, message = classify_error(exc)
                 log.warning("LLM %s attempt %d failed: %s", model, attempt, redact(message, self.api_key))
                 if category in RETRYABLE and attempt <= retries:
@@ -124,7 +124,7 @@ class GeminiLLM:
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                # LOW: cel mai mic nivel acceptat de modelele 3.x Flash testate (MINIMAL e refuzat).
+                # LOW: the lowest level the tested 3.x Flash models accept (MINIMAL is rejected).
                 thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
                 **extra,
             ),
@@ -150,7 +150,7 @@ class LLMNotConfigured(Exception):
 
 
 def create_llm(settings: Settings) -> LLMClient:
-    """Alege implementarea după LLM_PROVIDER (deocamdată doar 'gemini')."""
+    """Pick the implementation from LLM_PROVIDER (only 'gemini' for now)."""
     if settings.llm_provider != "gemini":
         raise LLMNotConfigured(f"unsupported LLM_PROVIDER '{settings.llm_provider}' (only 'gemini')")
     if not settings.llm_api_key or not settings.llm_model:

@@ -1,4 +1,4 @@
--- Calendar continuu care acoperă toate datele din comenzi (cumpărare ... livrare estimată).
+-- Continuous calendar covering every date found in orders (purchase ... estimated delivery).
 with bounds as (
     select
         least(
@@ -25,7 +25,7 @@ select
     to_char(date_day, 'YYYY-MM')                as year_month,
     trim(to_char(date_day, 'Month'))            as month_name,
     extract(day from date_day)::integer         as day_of_month,
-    extract(isodow from date_day)::integer      as iso_day_of_week,  -- 1 = luni
+    extract(isodow from date_day)::integer      as iso_day_of_week,  -- 1 = Monday
     trim(to_char(date_day, 'Day'))              as day_name,
     extract(week from date_day)::integer        as iso_week,
     extract(isodow from date_day) in (6, 7)     as is_weekend

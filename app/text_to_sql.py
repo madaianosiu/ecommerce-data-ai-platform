@@ -1,8 +1,8 @@
-"""Ruta "sql" din /v1/ask: întrebare -> SQL generat de LLM -> validare -> execuție read-only -> răspuns.
+"""The "sql" route of /v1/ask: question -> LLM-generated SQL -> validation -> read-only execution -> answer.
 
-Siguranță (în straturi): schema dată LLM-ului conține DOAR tabelele din core (fără
-review_embeddings); SQL-ul trece prin app/sql_guard.py; rulează ca api_reader (rolul e verificat
-înainte de execuție), într-o tranzacție READ ONLY cu statement_timeout de 10 s, cu LIMIT 200.
+Safety (in layers): the schema given to the LLM contains ONLY the core tables (no
+review_embeddings); the SQL goes through app/sql_guard.py; it runs as api_reader (the role is checked
+before execution), in a READ ONLY transaction with a 10 s statement_timeout, with LIMIT 200.
 """
 import datetime as dt
 import json
@@ -21,11 +21,11 @@ from app.sql_guard import ROW_CAP, UnsafeSQL, ValidatedSQL, cannot_answer_reason
 log = logging.getLogger("app.text_to_sql")
 
 CORE_YML = Path(__file__).resolve().parents[1] / "dbt" / "models" / "core" / "_core.yml"
-EXCLUDED_TABLES = {"review_embeddings"}   # vectori; căutarea în recenzii e ruta "rag"
+EXCLUDED_TABLES = {"review_embeddings"}   # vectors; searching reviews is the "rag" route
 STATEMENT_TIMEOUT_MS = 10_000
-ROWS_FOR_ANSWER = 50                      # câte rânduri vede LLM-ul care scrie răspunsul
-SMALL_SAMPLE_ROWS = 30                    # sub acest număr de rânduri, o rată/medie e semnalată ca fragilă
-MAX_ATTEMPTS = 2                          # generare + o singură reparare
+ROWS_FOR_ANSWER = 50                      # how many rows the answer-writing LLM sees
+SMALL_SAMPLE_ROWS = 30                    # below this many rows, a rate/average is flagged as unreliable
+MAX_ATTEMPTS = 2                          # generation + a single repair
 
 METRIC_DEFINITIONS = """Metric definitions (use exactly these):
 - Revenue = SUM(price_brl) from core.fact_order_items WHERE is_revenue (orders not canceled/unavailable). Freight is NOT revenue. Revenue in EUR = SUM(price_eur) with the same filter.
@@ -68,9 +68,9 @@ UNSUPPORTED_ANSWER = ("This question is outside what this assistant can answer. 
                       "say in their reviews.")
 
 
-# ---------------------------------------------------------------- erori
+# ---------------------------------------------------------------- errors
 class SqlRouteError(Exception):
-    """Eșec pe ruta sql, cu un mesaj sigur pentru client (fără detalii interne)."""
+    """Failure on the sql route, with a message that is safe for the client (no internal details)."""
 
     def __init__(self, public_message: str, internal: str = ""):
         super().__init__(public_message)
@@ -90,7 +90,7 @@ class RoleCheckFailed(Exception):
     pass
 
 
-# ---------------------------------------------------------------- contextul de schemă
+# ---------------------------------------------------------------- schema context
 @dataclass(frozen=True)
 class SqlContext:
     schema_text: str
@@ -103,8 +103,8 @@ def _clean(text: str | None, limit: int = 300) -> str:
 
 
 def build_schema_text(core_yml: dict, columns: list[tuple[str, str, str]]) -> SqlContext:
-    """core_yml: conținutul _core.yml; columns: (table, column, data_type) din information_schema,
-    în ordinea coloanelor. Tabelele din EXCLUDED_TABLES și cele fără model dbt nu apar."""
+    """core_yml: the content of _core.yml; columns: (table, column, data_type) from information_schema,
+    in column order. Tables in EXCLUDED_TABLES and tables without a dbt model are left out."""
     models = {m["name"]: m for m in core_yml.get("models", [])}
     by_table: dict[str, list[tuple[str, str]]] = {}
     for table, column, data_type in columns:
@@ -124,7 +124,7 @@ def build_schema_text(core_yml: dict, columns: list[tuple[str, str, str]]) -> Sq
 
 
 def load_sql_context(conn, core_yml_path: Path = CORE_YML) -> SqlContext:
-    """Citește descrierile din dbt și tipurile coloanelor din information_schema (ca api_reader)."""
+    """Read the descriptions from dbt and the column types from information_schema (as api_reader)."""
     core_yml = yaml.safe_load(core_yml_path.read_text(encoding="utf-8"))
     rows = conn.execute("""
         select table_name, column_name, data_type
@@ -137,7 +137,7 @@ def load_sql_context(conn, core_yml_path: Path = CORE_YML) -> SqlContext:
     return build_schema_text(core_yml, columns)
 
 
-# ---------------------------------------------------------------- prompturi
+# ---------------------------------------------------------------- prompts
 def _neutralize(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")
 
@@ -163,7 +163,7 @@ def build_answer_prompt(question: str, sql: str, rows: list[dict], truncated: bo
     ])
 
 
-# ---------------------------------------------------------------- execuție read-only
+# ---------------------------------------------------------------- read-only execution
 def _json_safe(value):
     if isinstance(value, Decimal):
         return float(value)
@@ -176,7 +176,7 @@ def _json_safe(value):
 
 def run_readonly_query(conn, sql: str, expected_user: str,
                        timeout_ms: int = STATEMENT_TIMEOUT_MS) -> list[dict]:
-    """Rulează SQL-ul validat într-o tranzacție READ ONLY cu timeout, doar ca rolul așteptat."""
+    """Run the validated SQL in a READ ONLY transaction with a timeout, only as the expected role."""
     try:
         with conn.transaction():
             conn.execute("SET TRANSACTION READ ONLY")
@@ -194,7 +194,7 @@ def run_readonly_query(conn, sql: str, expected_user: str,
     except psycopg.errors.QueryCanceled as exc:
         raise QueryTimeout(f"query exceeded the {timeout_ms // 1000} s statement timeout") from exc
     except (psycopg.OperationalError, psycopg.InterfaceError):
-        raise   # conexiune căzută -> 503 prin handler-ul global
+        raise   # lost connection -> 503 via the global handler
     except psycopg.Error as exc:
         raise QueryFailed(str(exc).splitlines()[0][:300]) from exc
     out = []
@@ -204,7 +204,7 @@ def run_readonly_query(conn, sql: str, expected_user: str,
     return out
 
 
-# ---------------------------------------------------------------- orchestrare
+# ---------------------------------------------------------------- orchestration
 @dataclass
 class SqlOutcome:
     answer: str
@@ -221,8 +221,8 @@ class SqlOutcome:
 
 def answer_with_sql(question: str, llm: LLMClient, ctx: SqlContext, connection_factory,
                     expected_user: str) -> SqlOutcome:
-    """Generează, validează și rulează SQL-ul (o reparare la eroare), apoi formulează răspunsul.
-    LLMUnavailable se propagă (endpoint-ul îl transformă în 503/502)."""
+    """Generate, validate and run the SQL (one repair on error), then write the answer.
+    LLMUnavailable propagates (the endpoint turns it into 503/502)."""
     outcome = SqlOutcome(answer="", sql=None, rows=[])
     previous_sql = error = None
     validated: ValidatedSQL | None = None

@@ -1,8 +1,8 @@
--- Grain: o comandă. Fără sume: veniturile stau în fact_order_items, plățile în fact_payments.
+-- Grain: one order. No amounts: revenue lives in fact_order_items, payments in fact_payments.
 select
     o.order_id,
-    o.customer_id,                                  -- id per comandă (din sursă)
-    c.customer_unique_id,                           -- clientul real -> dim_customers
+    o.customer_id,                                  -- per-order id (from the source)
+    c.customer_unique_id,                           -- the real customer -> dim_customers
     o.order_status,
     o.order_purchase_at,
     o.order_purchase_at::date                       as order_purchase_date,

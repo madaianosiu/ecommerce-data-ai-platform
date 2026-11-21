@@ -1,6 +1,6 @@
-"""Data API peste schema core.
+"""Data API over schema core.
 
-Rulare locală (din rădăcina proiectului, cu variabilele din .env):
+Local run (from the project root, with the variables from .env):
     .venv\\Scripts\\dotenv -f .env run -- uvicorn app.main:app --reload
 """
 import logging
@@ -21,15 +21,16 @@ from app.routers import ask, health, metrics, orders, products
 log = logging.getLogger("app")
 
 DESCRIPTION = """
-API read-only peste modelul dimensional din schema `core` (construit cu dbt din datele Olist).
+Read-only API over the dimensional model in schema `core` (built with dbt from the Olist data).
 
-* **Autentificare:** header `X-API-Key` pe toate endpoint-urile, în afară de `/v1/health`.
-* **Venit:** suma `price` pentru comenzile care nu sunt `canceled` / `unavailable`; sumele în EUR
-  folosesc cursul BRL→EUR din ziua cumpărării.
-* **`/v1/ask`:** răspuns generat de un LLM doar din recenziile scrise găsite prin căutare semantică,
-  cu citări [n]. Recenziile scrise sunt un subset înclinat spre scoruri mici.
-* **Erori:** 401 cheie lipsă/greșită, 400/422 parametri invalizi, 503 baza de date sau LLM-ul
-  indisponibil temporar, 502 eroare a LLM-ului.
+* **Authentication:** `X-API-Key` header on every endpoint except `/v1/health`.
+* **Revenue:** sum of `price` for orders that are not `canceled` / `unavailable`; EUR amounts
+  use the BRL→EUR rate of the purchase day.
+* **`/v1/ask`:** a router sends each question to read-only text-to-SQL (numbers) or to an LLM answer
+  built only from written reviews found by semantic search, with [n] citations. Written reviews are
+  a subset that skews toward low scores.
+* **Errors:** 401 missing/wrong key, 400/422 invalid parameters, 503 database or LLM temporarily
+  unavailable, 502 LLM error.
 """
 
 
@@ -37,11 +38,11 @@ API read-only peste modelul dimensional din schema `core` (construit cu dbt din 
 async def lifespan(app: FastAPI):
     settings = get_settings()
     pool = create_pool(settings)
-    pool.open(wait=False)  # nu blocăm pornirea; /v1/health raportează dacă baza nu răspunde
+    pool.open(wait=False)  # don't block startup; /v1/health reports whether the database responds
     app.state.pool = pool
 
-    # /v1/ask: clientul LLM (fără apel de rețea) și modelul de embedding, încărcat o singură dată.
-    # Dacă oricare lipsește, celelalte endpoint-uri merg normal; /v1/ask răspunde 503.
+    # /v1/ask: the LLM client (no network call) and the embedding model, loaded once.
+    # If either is missing, the other endpoints work normally; /v1/ask returns 503.
     app.state.llm = None
     try:
         app.state.llm = create_llm(settings)
@@ -65,17 +66,17 @@ app = FastAPI(
     description=DESCRIPTION,
     lifespan=lifespan,
     openapi_tags=[
-        {"name": "health", "description": "Starea serviciului și a bazei de date."},
-        {"name": "metrics", "description": "Indicatori agregați: venit, livrări."},
-        {"name": "products", "description": "Clasamente de produse."},
-        {"name": "orders", "description": "Comenzi individuale, cu paginare cu cursor."},
-        {"name": "ask", "description": "Întrebări în limbaj natural, cu răspuns din recenzii (RAG)."},
+        {"name": "health", "description": "Service and database status."},
+        {"name": "metrics", "description": "Aggregate indicators: revenue, deliveries."},
+        {"name": "products", "description": "Product rankings."},
+        {"name": "orders", "description": "Individual orders, with cursor pagination."},
+        {"name": "ask", "description": "Natural-language questions, routed to text-to-SQL or to review search (RAG)."},
     ],
 )
 
 
 def _db_unavailable(request: Request, exc: Exception) -> JSONResponse:
-    # Detaliile (host, mesajul driverului) rămân în log; clientul primește un mesaj generic.
+    # Details (host, driver message) stay in the log; the client gets a generic message.
     log.warning("Database unavailable on %s %s: %s", request.method, request.url.path, type(exc).__name__)
     return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         content={"detail": "Database unavailable"})

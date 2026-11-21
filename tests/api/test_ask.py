@@ -1,4 +1,4 @@
-"""/v1/ask cu embedder-ul și LLM-ul mock-uite: fără rețea, fără model, fără cheie reală."""
+"""/v1/ask with the embedder and the LLM mocked: no network, no model, no real key."""
 import logging
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -27,7 +27,7 @@ from app.routing import RouteDecision
 FAKE_LLM_KEY = "fake-llm-key-not-real-0123456789abcdef"
 
 
-# ---------------------------------------------------------------- dubluri de test
+# ---------------------------------------------------------------- test doubles
 class FakeEmbedder:
     model_name = "intfloat/multilingual-e5-small"
 
@@ -53,7 +53,7 @@ class FakeLLM:
                          output_tokens=80, thinking_tokens=30, total_tokens=1010)
 
 
-ROWS = [  # cum le-ar întoarce queries.search_reviews (deja ordonate)
+ROWS = [  # as queries.search_reviews would return them (already sorted)
     {"review_id": "r1", "review_score": 1, "text": "Atraso na entrega!", "similarity": 0.95},
     {"review_id": "r2", "review_score": 1, "text": "atraso na entrega", "similarity": 0.94},   # duplicat
     {"review_id": "r3", "review_score": 2, "text": "Produto não chegou", "similarity": 0.90},
@@ -63,7 +63,7 @@ ROWS = [  # cum le-ar întoarce queries.search_reviews (deja ordonate)
 
 @pytest.fixture
 def ask_env(client, monkeypatch):
-    """client (din conftest) + dependențele /v1/ask înlocuite. Întoarce obiectele pentru aserțiuni."""
+    """client (from conftest) + the /v1/ask dependencies replaced. Returns the objects for assertions."""
     env = SimpleNamespace(embedder=FakeEmbedder(), llm=FakeLLM(), rows=list(ROWS), search_args=None)
 
     def fake_search(conn, vector, model_name, min_score, max_score, limit):
@@ -72,7 +72,7 @@ def ask_env(client, monkeypatch):
 
     monkeypatch.setattr(queries, "search_reviews", fake_search)
     app.dependency_overrides[get_embedder_provider] = lambda: (lambda: env.embedder)
-    # Testele din acest fișier verifică ruta rag; rutarea are testele ei (tests/api/test_text_to_sql.py).
+    # The tests in this file check the rag route; routing has its own tests (tests/api/test_text_to_sql.py).
     app.dependency_overrides[get_classifier] = lambda: (lambda question: RouteDecision("rag", "test"))
     app.dependency_overrides[get_llm] = lambda: env.llm
     app.dependency_overrides[get_connection_factory] = lambda: (lambda: nullcontext(object()))
@@ -83,7 +83,7 @@ def post(client, headers, **body):
     return client.post("/v1/ask", json=body, headers=headers)
 
 
-# ---------------------------------------------------------------- autentificare
+# ---------------------------------------------------------------- authentication
 def test_ask_requires_api_key(client, ask_env):
     assert client.post("/v1/ask", json={"question": "Why late?"}).status_code == 401
     assert client.post("/v1/ask", json={"question": "Why late?"},
@@ -91,7 +91,7 @@ def test_ask_requires_api_key(client, ask_env):
     assert ask_env.embedder.calls == [] and ask_env.llm.calls == []
 
 
-# ---------------------------------------------------------------- validare
+# ---------------------------------------------------------------- validation
 @pytest.mark.parametrize("body, fragment", [
     ({}, "Field required"),
     ({"question": "x" * 501}, "at most 500 characters"),
@@ -111,7 +111,7 @@ def test_invalid_requests_are_422(client, auth_headers, ask_env, body, fragment)
     assert ask_env.llm.calls == []
 
 
-# ---------------------------------------------------------------- deduplicare
+# ---------------------------------------------------------------- deduplication
 def test_normalize_for_dedup():
     assert normalize_for_dedup("Ótimo produto!!!") == normalize_for_dedup("otimo   produto")
     assert normalize_for_dedup("Não chegou.") == "nao chegou"
@@ -122,7 +122,7 @@ def test_dedupe_keeps_best_of_each_group_and_limits():
     cands = [Candidate("b", 1, "Atraso na entrega", 0.90), Candidate("a", 1, "ATRASO na entrega!", 0.95),
              Candidate("c", 2, "Produto quebrado", 0.80), Candidate("d", 5, "!!!", 0.99)]
     out = dedupe_candidates(cands, top_k=10)
-    assert [c.review_id for c in out] == ["a", "c"]          # "d" n-are cuvinte, "b" e duplicat al lui "a"
+    assert [c.review_id for c in out] == ["a", "c"]          # "d" has no words, "b" is a duplicate of "a"
     assert [c.review_id for c in dedupe_candidates(cands, top_k=1)] == ["a"]
 
 
@@ -145,7 +145,7 @@ def test_user_prompt_delimits_and_numbers_reviews():
     assert prompt.index("<reviews>") < prompt.index('<review id="1" score="1">Atraso</review>') \
         < prompt.index('<review id="2" score="2">Não chegou</review>') < prompt.index("</reviews>")
     assert "[1]-[2]" in prompt
-    # instrucțiunea de limbă vine după recenzii, iar promptul se încheie cu întrebarea
+    # the language instruction comes after the reviews, and the prompt ends with the question
     assert prompt.index("in the language of the question below") > prompt.index("</reviews>")
     assert prompt.endswith("<question>Why late?</question>")
 
@@ -155,10 +155,10 @@ def test_prompt_injection_cannot_break_out_of_delimiters():
     prompt = build_user_prompt("q?", [Candidate("x", 1, evil, 0.9)])
     assert prompt.count("</reviews>") == 1 and prompt.count("<reviews>") == 1
     assert prompt.count("</review>") == 1
-    assert "Ignore previous instructions" in prompt   # textul rămâne, dar doar ca date
+    assert "Ignore previous instructions" in prompt   # the text stays, but only as data
 
 
-# ---------------------------------------------------------------- endpoint: succes
+# ---------------------------------------------------------------- endpoint: success
 def test_answer_sources_order_and_notes(client, auth_headers, ask_env):
     r = post(client, auth_headers, question="Why are customers unhappy with delivery?", top_k=15)
     assert r.status_code == 200, r.text
@@ -171,7 +171,7 @@ def test_answer_sources_order_and_notes(client, auth_headers, ask_env):
     assert body["retrieved_count"] == 4
     notes = " ".join(body["notes"])
     assert "written reviews only" in notes and "gemini-3.5-flash-lite" in notes and "total=1010" in notes
-    # citarea [1] din răspuns = primul element din sources = primul <review> din prompt
+    # citation [1] in the answer = the first item in sources = the first <review> in the prompt
     system_prompt, user_prompt = ask_env.llm.calls[0]
     assert system_prompt == SYSTEM_PROMPT
     assert '<review id="1" score="1">Atraso na entrega!</review>' in user_prompt
@@ -183,10 +183,10 @@ def test_source_n_is_sequential_and_matches_prompt_citations(client, auth_header
                      "similarity": 0.99 - i / 100} for i in range(12)]
     body = post(client, auth_headers, question="Why late?", top_k=10).json()
     sources = body["sources"]
-    assert [s["n"] for s in sources] == list(range(1, 11))          # 1, 2, ... fără goluri
-    assert [s["review_id"] for s in sources] == [f"r{i}" for i in range(10)]   # n urmează ordinea listei
+    assert [s["n"] for s in sources] == list(range(1, 11))          # 1, 2, ... with no gaps
+    assert [s["review_id"] for s in sources] == [f"r{i}" for i in range(10)]   # n follows the list order
     _, user_prompt = ask_env.llm.calls[0]
-    for s in sources:  # [n] din răspuns = <review id="n"> din prompt = sursa cu același n
+    for s in sources:  # [n] in the answer = <review id="n"> in the prompt = the source with the same n
         assert f'<review id="{s["n"]}" score="{s["review_score"]}">{s["text"]}</review>' in user_prompt
 
 
@@ -209,7 +209,7 @@ def test_empty_retrieval_does_not_call_the_llm(client, auth_headers, ask_env):
     assert ask_env.llm.calls == []
 
 
-# ---------------------------------------------------------------- endpoint: erori
+# ---------------------------------------------------------------- endpoint: errors
 def test_transient_llm_failure_is_503_with_retry_hint(client, auth_headers, ask_env):
     ask_env.llm = FakeLLM(exc=LLMUnavailable("rate_limit", transient=True))
     r = post(client, auth_headers, question="Why late?")
@@ -259,7 +259,7 @@ def api_error(code, status):
 
 
 class ScriptedClient:
-    """Fiecare apel generate_content consumă următorul element: o excepție sau un text."""
+    """Each generate_content call consumes the next item: an exception or a text."""
 
     def __init__(self, script):
         self.script, self.calls = list(script), []
@@ -303,7 +303,7 @@ def test_both_models_failing_raises_transient_unavailable():
     llm, client, _ = make_llm([api_error(503, "UNAVAILABLE")] * 4)
     with pytest.raises(LLMUnavailable) as e:
         llm.generate("sys", "user")
-    assert e.value.transient and len(client.calls) == 4    # 1 + 2 retry-uri + 1 fallback
+    assert e.value.transient and len(client.calls) == 4    # 1 + 2 retries + 1 fallback
 
 
 def test_auth_error_is_not_retried_and_skips_fallback():
@@ -362,7 +362,7 @@ def test_create_llm_selects_by_provider():
         create_llm(Settings(llm_provider="gemini", llm_model="", llm_api_key=FAKE_LLM_KEY))
     llm = create_llm(Settings(llm_provider="gemini", llm_model="gemini-3.5-flash-lite",
                               llm_fallback_model="gemini-3.5-flash", llm_api_key=FAKE_LLM_KEY))
-    assert isinstance(llm, GeminiLLM) and llm.fallback_model == "gemini-3.5-flash"   # fără apel de rețea
+    assert isinstance(llm, GeminiLLM) and llm.fallback_model == "gemini-3.5-flash"   # no network call
 
 
 def test_embedder_constants_match_the_embedding_script():

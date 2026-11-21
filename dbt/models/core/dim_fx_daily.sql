@@ -1,5 +1,5 @@
--- Un rând per zi calendaristică din dim_date, cu ultimul curs BRL->EUR publicat până în acea zi
--- (as-of). ECB nu publică în weekend și de sărbători: atunci is_filled = true.
+-- One row per calendar day in dim_date, with the latest BRL->EUR rate published on or before that day
+-- (as-of). The ECB does not publish on weekends and holidays: then is_filled = true.
 with rates as (
     select rate_date, rate
     from {{ ref('stg_fx_rates') }}

@@ -20,12 +20,12 @@ router = APIRouter(prefix="/metrics", tags=["metrics"], responses={**AUTH_ERRORS
 @router.get(
     "/revenue",
     response_model=RevenueResponse,
-    summary="Venit pe perioade",
+    summary="Revenue by period",
     description=(
-        "Venit = suma `price` din `core.fact_order_items` pentru comenzile care **nu** sunt "
-        "`canceled` sau `unavailable` (`is_revenue = true`, definiția din dbt `_core.yml`). "
-        "Freight-ul nu e inclus. Filtrarea și gruparea se fac după data cumpărării comenzii; "
-        "EUR folosește cursul BRL→EUR din ziua cumpărării. Exemplu: "
+        "Revenue = sum of `price` in `core.fact_order_items` for orders that are **not** "
+        "`canceled` or `unavailable` (`is_revenue = true`, the definition in dbt `_core.yml`). "
+        "Freight is not included. Filtering and grouping use the order's purchase date; "
+        "EUR uses the BRL→EUR rate of the purchase day. Example: "
         "`/v1/metrics/revenue?from=2017-01-01&to=2017-12-31&granularity=month&currency=EUR`."
     ),
 )
@@ -50,12 +50,12 @@ def revenue(
 @router.get(
     "/delivery-performance",
     response_model=DeliveryPerformance,
-    summary="Performanța livrărilor",
+    summary="Delivery performance",
     description=(
-        "Pentru comenzile `delivered` cu dată de livrare: număr de comenzi, media zilelor de la "
-        "cumpărare la livrare și procentul livrat după data estimată. Comenzile `delivered` fără "
-        "dată de livrare sunt excluse și numărate separat. `state` filtrează după statul clientului "
-        "(adresa din comanda cea mai recentă, din `dim_customers`). Exemplu: "
+        "For `delivered` orders with a delivery date: number of orders, average days from "
+        "purchase to delivery, and the percentage delivered after the estimated date. `delivered` "
+        "orders without a delivery date are excluded and counted separately. `state` filters by the "
+        "customer's state (address from the most recent order, from `dim_customers`). Example: "
         "`/v1/metrics/delivery-performance?state=SP`."
     ),
 )

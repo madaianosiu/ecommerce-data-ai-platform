@@ -1,5 +1,5 @@
-"""Paginarea keyset fără bază: un orders_page fals aplică aceeași regulă ca SQL-ul
-((order_purchase_at, order_id) < cursor, ordonat descrescător), pe date în memorie."""
+"""Keyset pagination without a database: a fake orders_page applies the same rule as the SQL
+((order_purchase_at, order_id) < cursor, sorted descending), on in-memory data."""
 from datetime import datetime, timedelta
 
 import pytest
@@ -8,7 +8,7 @@ from app import queries
 from app.pagination import InvalidCursor, decode_cursor, encode_cursor
 
 T0 = datetime(2018, 1, 1, 12, 0, 0)
-# 11 comenzi; câteva au același timestamp, ca să testăm tie-break-ul pe order_id.
+# 11 orders; some share a timestamp, to test the order_id tie-break.
 ROWS = [
     {"order_id": f"o{i:02d}", "customer_unique_id": f"c{i}", "order_status": "delivered",
      "order_purchase_at": T0 - timedelta(hours=i // 3), "order_approved_at": None,

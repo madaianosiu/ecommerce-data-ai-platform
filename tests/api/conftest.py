@@ -1,9 +1,9 @@
-"""Fixture-uri pentru testele API.
+"""Fixtures for the API tests.
 
-- `client`: fără bază de date. Setările și conexiunea sunt înlocuite prin dependency_overrides,
-  iar funcțiile din app.queries se înlocuiesc per test cu monkeypatch.
-- `live_client`: aplicația reală (lifespan + pool) conectată ca api_reader. Se sare automat dacă
-  variabilele de mediu lipsesc sau baza nu răspunde. Rulare: dotenv -f .env run -- pytest
+- `client`: no database. Settings and the connection are replaced through dependency_overrides,
+  and the functions in app.queries are replaced per test with monkeypatch.
+- `live_client`: the real app (lifespan + pool) connected as api_reader. Skipped automatically if
+  the environment variables are missing or the database does not respond. Run: dotenv -f .env run -- pytest
 """
 import os
 
@@ -31,9 +31,9 @@ def auth_headers(api_key) -> dict:
 @pytest.fixture
 def client():
     app.dependency_overrides[get_settings] = lambda: Settings(api_key=TEST_API_KEY)
-    app.dependency_overrides[get_conn] = lambda: object()  # conexiune falsă; queries sunt mock-uite
+    app.dependency_overrides[get_conn] = lambda: object()  # fake connection; queries are mocked
     try:
-        yield TestClient(app)  # fără `with`: lifespan-ul (pool-ul) nu pornește
+        yield TestClient(app)  # no `with`: the lifespan (pool) does not start
     finally:
         app.dependency_overrides.clear()
 
@@ -43,7 +43,7 @@ def _live_settings_or_skip() -> Settings:
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         pytest.skip(f"integration: missing env vars {missing} (run via dotenv)")
-    # Testele de integrare nu au nevoie de modelul de embedding (încărcarea durează zeci de secunde).
+    # The integration tests don't need the embedding model (loading it takes tens of seconds).
     os.environ["API_PRELOAD_EMBEDDER"] = "0"
     get_settings.cache_clear()
     settings = get_settings()
