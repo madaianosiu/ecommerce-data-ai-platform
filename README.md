@@ -91,6 +91,59 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
 - **Limitation: the evidence skews negative.** Only reviews with a written comment can be retrieved: about 41% of all reviews. Unhappy customers write far more often, so 1-star reviews are 21% of written reviews vs 12% of all reviews. Answers describe what the retrieved reviews say, not how common an opinion is among all customers.
 - **Privacy note**: on the free Gemini API tier, Google may use prompts and responses to improve its products. That is acceptable here because the Olist reviews are a public dataset. Do not send private or customer data through a free-tier key.
 
+##### Example
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/ask \
+  -H "X-API-Key: <your API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Why are customers unhappy with delivery?"}'
+```
+
+Response from a real run (trimmed):
+
+```json
+{
+  "route": "rag",
+  "answer": "Customers are unhappy with the delivery due to several key issues:\n\n* **Delays and missed deadlines:** Customers report significant delivery delays, failures to meet established deadlines, and long waiting times exceeding a month [4, 8, 10, 13].\n* **Non-delivery and cancellation issues:** Some customers did not receive their items at all, or had products marked as \"unavailable\" shortly before the delivery deadline, and even received items after explicitly asking to cancel [3, 5, 6].\n* **Problems with the carrier (Correios):** Complaints include the carrier failing to show up on the delivery date, recording false information (such as claiming nobody was at the location), failing to attempt delivery, and requiring customers to pick up items far from their homes [7, 11, 12].\n* **Lack of communication and customer support:** Customers complain about a lack of updates, notifications, explanations for delays, phone contact, or assistance from customer service and ombudsman channels [5, 8, 9, 10, 13, 14].\n* **High shipping costs:** High freight costs compared to the product's value also discourage purchases [1].\n\n*(Note: These are a subset of reviews: only reviews with written comments, which skew toward low scores.)*",
+  "sources": [
+    {
+      "n": 4,
+      "review_id": "b40a6984937cc251558d24d0b5caa929",
+      "review_score": 1,
+      "text": "Não cumprem os ´prazos e ignoram a expectativa do cliente. Falta profissionalismo. Impossível recomendar....."
+    },
+    {
+      "n": 7,
+      "review_id": "640a2362c470c6006b36ae2b39859859",
+      "review_score": 3,
+      "text": "INFELIZMENTE O ÚNICO PROBLEMA É A ENTREGA SER FEITA PELOS CORREIOS, NÃO COMPARECEM NA DATA DA ENTREGA E AINDA COLOCAM INFORMAÇÕES INCORRETAS! EX.: NÃO TINHA NINGUÉM NO LOCAL DE ENTREGA!"
+    },
+    {
+      "n": 10,
+      "review_id": "2d0a07007cc84621a2bc694505be4036",
+      "review_score": 1,
+      "text": "Atraso na entrega sem dar satisfação ao cliente, que com certeza escolheu o produto com cuidado e com as melhores expectativas. Falta de consideração."
+    },
+    {
+      "n": 13,
+      "review_id": "c04fd11d96ca96f3fda80b3d330f12de",
+      "review_score": 1,
+      "text": "Tem mais de um mês que comprei o produto e ainda não recebi. A gente paga na hora mas ninguém da nem satisfação quanto a entrega. Muita falta de respeito."
+    }
+  ],
+  "retrieved_count": 60,
+  "notes": [
+    "Sources are written reviews only: about 41% of all reviews, skewed toward low scores (1-star reviews are 21% of written reviews vs 12% of all reviews).",
+    "Retrieved 60 candidate reviews by semantic similarity; 15 kept after removing near-duplicate texts.",
+    "Model: gemini-3.5-flash-lite",
+    "Token usage: prompt=1138 output=276 thinking=0 total=1414"
+  ]
+}
+```
+
+*The `sources` list is shortened for readability: the real response has 15 sources, and the four shown here are numbers [4], [7], [10] and [13] in the answer's citations.*
+
 ![Auto-generated OpenAPI docs](docs/api-docs.png)
 
 *Auto-generated OpenAPI docs*
@@ -98,6 +151,12 @@ A read-only FastAPI service over the `core` star schema. All endpoints are versi
 ## Real data problems this project tackles
 
 These issues are in the source data. Each one is handled in dbt and guarded by an automated test; the figures below come from the actual runs.
+
+![dbt lineage graph](docs/lineage.png)
+
+*dbt lineage graph: raw sources, staging models, star schema in core, and the reconciliation tests*
+
+The graph reads left to right: the `raw` sources (green) feed the `stg_*` staging views, which build the dimensions and facts in `core` and end in the reconciliation model and tests, while the FX path (`raw.fx_rates` → `stg_fx_rates` → `dim_fx_daily`) feeds the EUR columns of `fact_order_items` and `fact_payments`.
 
 | Problem | Why it matters | How it was handled |
 |---|---|---|
